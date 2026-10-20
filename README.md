@@ -166,7 +166,7 @@ npm run dist
 | | `maxTokens` | `2048` | 界面范围 256–8192 |
 | | `maxEvidence` | `8` | 证据块数量，写入时钳制在 2–16，证据包内再钳制到 10 |
 | | `language` | `zh` | 仅影响 AI 结论语言（简体中文 / English） |
-| 分析行为 | `useRuleEngine` | `true` | 当前版本规则引擎始终启用，该开关尚未接入逻辑，详见「已知限制」 |
+| 分析行为 | `useRuleEngine` | `true` | 关闭后基础分析只输出文件、环境与阶段，不做故障签名匹配、嫌疑排序与关键词统计 |
 | | `redact` | `true` | 发送前替换 IPv4、UUID、邮箱、玩家名 |
 | 文件处理 | `maxArchiveMb` | `200` | 压缩包体积上限，写入时钳制在 10–4096 |
 | 启动器联动 | `launcher.enabled` | `false` | 启用后应用启动时读取一次启动器配置；关闭时不做任何文件读取 |
@@ -327,8 +327,7 @@ LingYvMinecraftAITool/
 ├─ electron-builder.yml        Windows 打包配置
 ├─ test/
 │  ├─ fixture-src/             夹具源文件（crash / latest / debug / hmcl / history）
-│  ├─ make-fixture.cjs         生成 fixture-build（GB18030 编码、gzip 历史日志、重复 jar）
-│  ├─ fixture.zip              压缩后的测试包
+│  ├─ make-fixture.cjs         生成 fixture-build 与 fixture.zip（GB18030、gzip 历史日志、重复 jar）
 │  └─ run.ts                   管线测试入口
 ├─ tools/
 │  ├─ e2e.cjs                  Electron 端到端冒烟测试
@@ -350,11 +349,16 @@ npm run test:pipeline
 
 `test/run.ts` 会对 `test/fixture.zip` 执行完整基础分析并打印：各阶段进度、文件清单与编码、环境、阶段判定、崩溃报告、规则命中、嫌疑评分、关键词统计、说明，以及证据包前 2,200 字符。
 
-末尾还会运行启动器配置检查：关闭时不读取、路径无效与 JSON 损坏时回退、PCL2 与 HMCL 的字段解析、环境补全且不覆盖已有值；随后在临时目录上验证「直接读取游戏目录」：结构识别、崩溃报告解析、重复模组与 Mixin 命中、跳过 assets、空目录报错；最后验证 Java 扫描：版本与架构归一、release 解析、缺失可执行文件标记无效、候选去重、`JAVA_HOME` 采纳、空结果提示。任一检查失败即以非零码退出。
+末尾还会运行三组检查，任一失败即以非零码退出：
+
+- **规则引擎开关**：开启时有命中、嫌疑与关键词统计；关闭后三者皆为空、说明中明确告知，且文件清单、环境与阶段判定不受影响；目录模式同样受控。
+- **启动器配置**：关闭时不读取、路径无效与 JSON 损坏时回退、PCL2 与 HMCL 的字段解析、环境补全且不覆盖已有值。
+- **目录直接分析**：结构识别、崩溃报告解析、重复模组与 Mixin 命中、跳过 assets、空目录报错。
+- **Java 扫描**：版本与架构归一、release 解析、缺失可执行文件标记无效、候选去重、`JAVA_HOME` 采纳、空结果提示。
 
 夹具覆盖：GB18030 编码的 `latest.log`、gzip 压缩的历史日志、`hmcl.log`、崩溃报告，以及 `mods/` 下同名不同版本的 jar（用于验证重复模组规则）。
 
-修改 `test/fixture-src/` 后，执行 `node test/make-fixture.cjs` 生成 `test/fixture-build/`（该脚本不包含压缩步骤），再将其打包为 `test/fixture.zip`。
+`test/fixture.zip` 是生成产物、不入库，由 `pretest:pipeline` / `pretest:e2e` 自动调用 `npm run test:fixture` 重建，因此干净仓库直接跑测试即可。修改 `test/fixture-src/` 后执行 `npm run test:fixture` 重新生成（该脚本同时产出 `test/fixture-build/` 与 `test/fixture.zip`，压缩用 Node 标准库实现，不依赖额外包或 PowerShell）。
 
 ### 端到端冒烟
 
@@ -362,26 +366,36 @@ npm run test:pipeline
 npm run test:e2e
 ```
 
-启动真实 Electron 窗口，注入脚本依次调用 `analysis.run` → `analysis.ai({ trigger: 'auto' })` → `analysis.lines`，输出：分析是否成功、文件数、阶段、加载器、规则命中、嫌疑排序、自动 AI 守卫的返回内容（若返回 `LEAKED` 说明守卫失效）、行号定位结果。脚本还会临时构造一个 PCL2 目录，验证启动器联动：默认 `disabled`、刷新后 `ok` 且游戏目录与内存解析正确、分析环境不被覆盖；并在同一目录写入 `logs` 与 `crash-reports`，调用目录分析验证真实 IPC 返回 `dirOk / dirFiles / dirStage`。脚本以是否抛出异常决定退出码，30 秒未完成则以 2 退出，结果需人工判读。
+启动真实 Electron 窗口，注入脚本依次调用 `analysis.run` → `analysis.ai({ trigger: 'auto' })` → `analysis.lines`，并临时构造一个 PCL2 目录验证启动器联动，同一目录再调用目录分析。
+
+脚本带断言，**任一失败即以 1 退出**，30 秒未完成以 2 退出，无需人工判读。覆盖：
+
+- 渲染层已挂载（`root` 有子节点）——CSP 收紧脚本后若拦下打包产物，这一项会立刻失败；
+- `window.api.platform` 可用——`sandbox: true` 下 preload 与 `contextBridge` 仍工作；
+- 压缩包分析成功（曾出现 `run-failed` 却以 0 退出的情况）、归档名、文件数、阶段、加载器、Mixin 与重复模组命中、嫌疑首位；
+- 自动 AI 门禁未被放行（一旦返回 `LEAKED` 即失败）且拒绝原因明确；
+- 日志行定位成功；
+- 启动器联动：默认 `disabled`、刷新后 `ok`、识别为 PCL2、游戏目录与 6144 MB 内存解析正确、日志中的 8192 MB 与 HMCL 不被覆盖；
+- 目录分析返回 `dirOk / dirFiles / dirStage`。
 
 ---
 
 ## 已知限制
 
-1. **`useRuleEngine` 开关未接线**：`rules.ts` 的规则始终执行，该设置目前只影响界面展示。
-2. **历史日志说明与实际行为不一致**：侧栏与说明文案暗示历史日志默认不参与，实际 `discover` 会纳入最多 4 份；`base.ts` 中对应的提示分支几乎不会触发。
-3. **仅支持 ZIP**：`.7z`、`.rar`、`.tar.gz` 不支持；单文件模式仅接受 `.log` / `.txt`。
-4. **无重试与缓存**：模型返回非法 JSON 时直接报错，需要重新点击；重启应用后需重新导入文件（上次分析上下文只保存在主进程内存）。
-5. **无代码签名与自动更新**：已提供 `electron-builder` 打包配置（Windows x64），但产物未签名、未接入自动更新与 CI 发布流程。
-6. **界面仅中文**：`language` 设置只切换 AI 结论语言。
-7. **规则存在误报面**：如 `gl` 规则包含裸 `OpenGL` 关键词，会命中正常初始化行；关键词统计按「包含该字符串的行数」计数，堆栈帧也会计入，不等于错误条数。
-8. **没有游戏启动流程**：启动器联动只补全分析环境，不参与启动游戏，也不执行启动器本身。
-9. **HMCL 配置读取依赖版本布局**：3.16+ 的 `config/*.json` 与旧版 `hmcl.json` 字段不同；实例无法定位时只跳过实例级内存/Java，不影响其余字段。
-10. **不解析 PCL2 的 Java 选择**：`LaunchArgumentJavaSelect` 为结构化字符串，当前只读取游戏目录与内存。
-11. **目录模式依赖标准布局**：只扫描 3 层子目录并跳过 `config` 等目录；日志放在非常规位置的整合包请改用导出压缩包。
-12. **Java 扫描是尽力枚举**：便携版、重命名或安装在非常规目录的 JDK 不会被发现，不能当作系统全量清单。
-13. **注册表来源可能不可用**：受限环境中 `reg.exe` 被禁止时会跳过该来源，仅依赖环境变量与目录扫描。
-14. **Java 扫描不自动执行**：启动时只读缓存；缓存为空时设置页显示「尚未扫描」。
+1. **历史日志说明与实际行为不一致**：侧栏与说明文案暗示历史日志默认不参与，实际 `discover` 会纳入最多 4 份；`base.ts` 中对应的提示分支几乎不会触发。
+2. **仅支持 ZIP**：`.7z`、`.rar`、`.tar.gz` 不支持；单文件模式仅接受 `.log` / `.txt`。
+3. **无重试与缓存**：模型返回非法 JSON 时直接报错，需要重新点击；重启应用后需重新导入文件（上次分析上下文只保存在主进程内存）。
+4. **无代码签名与自动更新**：已提供 `electron-builder` 打包配置（Windows x64），但产物未签名、未接入自动更新与 CI 发布流程。
+5. **界面仅中文**：`language` 设置只切换 AI 结论语言。
+6. **规则存在误报面**：如 `gl` 规则包含裸 `OpenGL` 关键词，会命中正常初始化行；关键词统计按「包含该字符串的行数」计数，堆栈帧也会计入，不等于错误条数。
+7. **没有游戏启动流程**：启动器联动只补全分析环境，不参与启动游戏，也不执行启动器本身。
+8. **HMCL 配置读取依赖版本布局**：3.16+ 的 `config/*.json` 与旧版 `hmcl.json` 字段不同；实例无法定位时只跳过实例级内存/Java，不影响其余字段。
+9. **不解析 PCL2 的 Java 选择**：`LaunchArgumentJavaSelect` 为结构化字符串，当前只读取游戏目录与内存。
+10. **目录模式依赖标准布局**：只扫描 3 层子目录并跳过 `config` 等目录；日志放在非常规位置的整合包请改用导出压缩包。
+11. **Java 扫描是尽力枚举**：便携版、重命名或安装在非常规目录的 JDK 不会被发现，不能当作系统全量清单。
+12. **注册表来源可能不可用**：受限环境中 `reg.exe` 被禁止时会跳过该来源，仅依赖环境变量与目录扫描。
+13. **Java 扫描不自动执行**：启动时只读缓存；缓存为空时设置页显示「尚未扫描」。
+14. **CSP 的 `style-src` 仍允许 `'unsafe-inline'`**：Vite 开发模式通过 JS 注入 `<style>` 标签加载 CSS，生产构建没有内联样式需求；脚本策略已收紧到 `script-src 'self'`。
 15. **仅提供 Windows x64 二进制**：`npm run dist` 生成安装包与便携版；macOS / Linux 需要单独配置 target 并在对应系统构建。
 
 ---

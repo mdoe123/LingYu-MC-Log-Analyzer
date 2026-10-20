@@ -495,12 +495,22 @@ export function buildSuspects(input: {
   return { suspects, duplicates }
 }
 
+/**
+ * 规则引擎总入口。`useRuleEngine` 为 false 时整体短路：不跑 14 条静态签名、
+ * 不跑 hs_err / duplicate-mods 动态检查、不做嫌疑评分与关键词统计。
+ * 此时调用方负责在 notes 中说明，避免用户误以为“没有命中”等于“没有问题”。
+ */
 export function runRules(input: {
   sources: LogSource[]
   crashReports: CrashSummary[]
   hasHsErr: boolean
   modJars: string[]
+  useRuleEngine?: boolean
 }): { findings: RuleHit[]; suspects: Suspect[]; signatures: SignatureCount[] } {
+  if (input.useRuleEngine === false) {
+    return { findings: [], suspects: [], signatures: [] }
+  }
+
   const candidates = input.sources.map((source) => ({ source, indices: candidateIndices(source.log) }))
   const findings: RuleHit[] = []
 

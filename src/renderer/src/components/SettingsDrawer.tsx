@@ -349,7 +349,10 @@ export function SettingsDrawer({ settings, onChange, onClose, onReset }: Props):
             <div className="switch-row">
               <div className="switch-text">
                 <b>启用本地规则引擎</b>
-                <span>已知故障签名先在本机匹配，基础分析永远不消耗 token。</span>
+                <span>
+                  已知故障签名先在本机匹配，基础分析永远不消耗 token。关闭后基础分析只输出文件、环境与阶段，
+                  不再给出故障签名、嫌疑排序与关键词统计。
+                </span>
               </div>
               <Switch
                 on={settings.useRuleEngine}

@@ -2,9 +2,14 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
+    <!--
+      script-src 只允许同源脚本，不再放行 'unsafe-inline'：渲染层被注入时无法直接执行内联脚本。
+      style-src 保留 'unsafe-inline'，因为 Vite 开发模式通过 JS 注入 <style> 标签加载 CSS。
+      connect-src 放行 localhost 是为了 dev:web 下的 Vite HMR。
+    -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ws://localhost:* http://localhost:*"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ws://localhost:* http://localhost:*"
     />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 22 22'%3E%3Crect width='22' height='22' rx='6' fill='%2316241a'/%3E%3Cpath d='M6 8.6 11 6.1l5 2.5-5 2.5z' fill='%2379c97f'/%3E%3C/svg%3E" />

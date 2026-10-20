@@ -1,0 +1,30 @@
+fix: 接线规则引擎开关、自动生成测试夹具、e2e 加断言、开启渲染进程沙箱
+
+修复项目审查中的四项 P0。
+
+1. useRuleEngine 接线（此前只有定义、默认值与开关，rules.ts 从未读取）
+   - runRules 入口接收 useRuleEngine，为 false 时整体短路：无命中、无嫌疑、
+     无关键词统计，并在 notes 中明确告知，避免「零命中」被误读为「没问题」。
+   - 设置经新增的 AnalyzeOptions 从主进程传入 analyzeArchive / analyzeGameDir，
+     压缩包、单文件与目录三条路径都生效；文件清单、环境与阶段判定不受影响。
+
+2. 测试夹具可复现（此前 fixture.zip 被忽略且生成脚本不负责压缩）
+   - make-fixture.cjs 用 Node 标准库手写最小 ZIP（deflate + 中央目录），
+     同时产出 fixture-build/ 与 fixture.zip，不引入 yazl/archiver、不依赖 PowerShell。
+   - 新增 test:fixture，由 pretest:pipeline / pretest:e2e 自动调用；
+     fixture.zip 保持忽略、不入库。
+
+3. 端到端脚本加断言（此前 run-failed、LEAKED 也以 0 退出）
+   - 24 项断言，失败即 app.exit(1)。
+   - 新增两条哨兵断言：root 有子节点（CSP 收紧后若拦下脚本会立刻失败）、
+     window.api.platform 可用（sandbox 下 preload 与 contextBridge 仍工作）。
+
+4. 渲染进程沙箱与 CSP
+   - sandbox: false 改为 true；CSP 的 script-src 去掉 'unsafe-inline'，收紧到 'self'。
+   - style-src 保留 'unsafe-inline'（Vite 开发模式以 JS 注入样式标签）。
+   - 已验证：打包产物 app.asar 内 file:// 页面经 CDP 探测可正常挂载、无 CSP 违规。
+
+同步更新 README、docs/ARCHITECTURE.md 与 docs/AUDIT.md；
+test:pipeline 检查项由 43 增至 54。
+
+Co-Authored-By: CodeBuddy <noreply@codebuddy.ai>

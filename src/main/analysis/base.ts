@@ -104,8 +104,9 @@ function finalizeAnalysis(input: {
   notes: string[]
   startedAt: number
   onProgress: ProgressFn
+  useRuleEngine: boolean
 }): AnalyzeOutput {
-  const { loaded, notes, onProgress } = input
+  const { loaded, notes, onProgress, useRuleEngine } = input
 
   const sources: LogSource[] = loaded
     .map((item) => ({ file: item.file, log: item.log }))
@@ -123,14 +124,18 @@ function finalizeAnalysis(input: {
   }
 
   const stageGuess = guessStage({ sources, crashReports, hasHsErr, env: environment })
-  const rules = runRules({ sources, crashReports, hasHsErr, modJars: input.modJars })
+  const rules = runRules({ sources, crashReports, hasHsErr, modJars: input.modJars, useRuleEngine })
 
   onProgress({
     stage: 'rules',
-    label: '规则匹配',
-    detail: `命中 ${rules.findings.length} 条特征`,
+    label: useRuleEngine ? '规则匹配' : '规则引擎已关闭',
+    detail: useRuleEngine ? `命中 ${rules.findings.length} 条特征` : '未做故障签名匹配',
     progress: 94
   })
+
+  if (!useRuleEngine) {
+    notes.push('设置中已关闭本地规则引擎，本次未做故障签名匹配、嫌疑排序与关键词统计。')
+  }
 
   if (crashReports.length === 0) {
     notes.push(
@@ -178,12 +183,19 @@ function finalizeAnalysis(input: {
   }
 }
 
+export interface AnalyzeOptions {
+  /** 来自设置项的 `useRuleEngine`，默认 true。关闭时规则引擎整体短路。 */
+  useRuleEngine?: boolean
+}
+
 export async function analyzeArchive(
   archivePath: string,
   archiveName: string,
   archiveSize: number,
-  onProgress: ProgressFn
+  onProgress: ProgressFn,
+  options: AnalyzeOptions = {}
 ): Promise<AnalyzeOutput> {
+  const useRuleEngine = options.useRuleEngine !== false
   const startedAt = Date.now()
   const notes: string[] = []
 
@@ -202,9 +214,24 @@ export async function analyzeArchive(
       loaded.file.kind === 'crash' ? [parseCrashReport(loaded.file.path, loaded.text)] : []
     const env = extractEnvironment({ crashReports, sources })
     const stageGuess = guessStage({ sources, crashReports, hasHsErr: loaded.file.kind === 'hs_err', env })
-    const rules = runRules({ sources, crashReports, hasHsErr: loaded.file.kind === 'hs_err', modJars: [] })
+    const rules = runRules({
+      sources,
+      crashReports,
+      hasHsErr: loaded.file.kind === 'hs_err',
+      modJars: [],
+      useRuleEngine
+    })
 
-    onProgress({ stage: 'rules', label: '规则匹配', detail: `${rules.findings.length} 条命中`, progress: 96 })
+    onProgress({
+      stage: 'rules',
+      label: useRuleEngine ? '规则匹配' : '规则引擎已关闭',
+      detail: useRuleEngine ? `${rules.findings.length} 条命中` : '未做故障签名匹配',
+      progress: 96
+    })
+
+    if (!useRuleEngine) {
+      notes.push('设置中已关闭本地规则引擎，本次未做故障签名匹配、嫌疑排序与关键词统计。')
+    }
 
     return {
       sources,
@@ -340,7 +367,8 @@ export async function analyzeArchive(
     historyCandidates: discovery.candidates.some((item) => item.kind === 'history'),
     notes,
     startedAt,
-    onProgress
+    onProgress,
+    useRuleEngine
   })
 }
 
@@ -351,8 +379,10 @@ export async function analyzeArchive(
 export async function analyzeGameDir(
   dirPath: string,
   dirName: string,
-  onProgress: ProgressFn
+  onProgress: ProgressFn,
+  options: AnalyzeOptions = {}
 ): Promise<AnalyzeOutput> {
+  const useRuleEngine = options.useRuleEngine !== false
   const startedAt = Date.now()
   const notes: string[] = ['本次分析直接读取游戏目录，文件路径均为相对路径。']
 
@@ -454,6 +484,7 @@ export async function analyzeGameDir(
     historyCandidates: discovery.candidates.some((item) => item.kind === 'history'),
     notes,
     startedAt,
-    onProgress
+    onProgress,
+    useRuleEngine
   })
 }

@@ -34,7 +34,9 @@
 - `src/shared/types.ts`：唯一跨进程类型来源，同时承担 IPC 契约文档的职责。
 - `src/main/launcher/*`：启动器配置的只读解析，不依赖 Electron API，可直接在 Node 测试中调用。
 
-上下文隔离开启、`nodeIntegration` 关闭；`sandbox` 亦为关闭状态（`sandbox: false`）。窗口内 `window.open` 一律交给系统浏览器。
+上下文隔离开启、`nodeIntegration` 关闭、**渲染进程沙箱开启**（`sandbox: true`）：preload 只保留 `ipcRenderer` / `contextBridge` / `webUtils`，渲染层被注入后也无法直接摸到 Node 能力。窗口内 `window.open` 一律交给系统浏览器，`will-navigate` 之外的跳转一律阻止。
+
+`src/renderer/index.html` 通过 meta 标签声明 CSP：`script-src 'self'`（不放行 `'unsafe-inline'`）、`style-src 'self' 'unsafe-inline'`（Vite 开发模式以 JS 注入 `<style>` 加载 CSS，故样式仍需放行内联）、`img-src 'self' data: blob:`、`connect-src 'self'` 外加 localhost（供 `dev:web` 的 HMR）。收紧脚本策略后，「渲染层是否真的挂载成功」成为回归点，由 `tools/e2e.cjs` 的 `rendered` 断言守着。
 
 ## 3. IPC 契约
 
@@ -199,7 +201,7 @@ analyzeArchive(path, name, size, onProgress)
 
 三件事在同一模块内完成。
 
-**(a) 规则匹配**：14 条静态规则（见 [RULES.md](RULES.md)）逐条扫描候选行。候选行的定义是：级别为 `ERROR` / `FATAL` / `WARN`，或正文包含 `Exception|Error|Caused by|Mixin|Missing|Duplicate|OutOfMemory`。每条规则最多收集 3 条证据，同一文件内行号相差小于 3 的锚点会被视为重复；证据正文优先取整段堆栈块（最多 14 行），否则取命中行前 2 行到后 6 行的窗口。
+**(a) 规则匹配**：`runRules()` 是唯一入口，接收来自设置的 `useRuleEngine`；为 `false` 时整体短路，返回空的命中、嫌疑与关键词统计，并由调用方在 `notes` 中说明，避免「零命中」被误读为「没问题」。开启时 14 条静态规则（见 [RULES.md](RULES.md)）逐条扫描候选行。候选行的定义是：级别为 `ERROR` / `FATAL` / `WARN`，或正文包含 `Exception|Error|Caused by|Mixin|Missing|Duplicate|OutOfMemory`。每条规则最多收集 3 条证据，同一文件内行号相差小于 3 的锚点会被视为重复；证据正文优先取整段堆栈块（最多 14 行），否则取命中行前 2 行到后 6 行的窗口。
 
 命中结果按严重级别升序排列（critical → low）。另外两条动态检查会插入列表前部：
 
@@ -432,13 +434,13 @@ analysis:run
 
 | 层级 | 入口 | 覆盖内容 |
 | --- | --- | --- |
-| 管线测试 | `npm run test:pipeline` | 夹具压缩包的完整基础分析、编码转换（GB18030 / gzip）、规则命中、嫌疑评分、证据包生成；启动器配置解析与回退（PCL2 / HMCL / 路径无效 / JSON 损坏）、环境补全与不覆盖；目录分析（结构识别、崩溃报告、重复模组、跳过 assets、空目录报错）；Java 扫描（版本/架构归一、release 解析、无效项、候选去重、`JAVA_HOME`、空结果） |
-| 端到端 | `npm run test:e2e` | 真实 Electron 窗口内的 IPC 往返、自动 AI 守卫输出、行号定位（打印判读，无断言） |
-| 类型检查 | `npm run typecheck` | 渲染层与预加载类型（主进程类型由 `tsconfig.node.json` 覆盖，未纳入该脚本） |
+| 管线测试 | `npm run test:pipeline` | 夹具压缩包的完整基础分析、编码转换（GB18030 / gzip）、规则命中、嫌疑评分、证据包生成；**规则引擎开关**（开启有命中/嫌疑/关键词，关闭三者皆空且说明中告知，文件、环境与阶段不受影响，目录模式同样受控）；启动器配置解析与回退（PCL2 / HMCL / 路径无效 / JSON 损坏）、环境补全与不覆盖；目录分析（结构识别、崩溃报告、重复模组、跳过 assets、空目录报错）；Java 扫描（版本/架构归一、release 解析、无效项、候选去重、`JAVA_HOME`、空结果）。共 54 项，任一失败非零退出 |
+| 端到端 | `npm run test:e2e` | 真实 Electron 窗口内的 IPC 往返、自动 AI 守卫、行号定位、启动器联动、目录分析，另外验证渲染层挂载与 preload 桥接。共 24 项断言，失败即 `app.exit(1)` |
+| 类型检查 | `npm run typecheck` | 主进程与预加载（`tsconfig.node.json`）＋ 渲染层（`tsconfig.web.json`） |
 
-夹具生成链路：`test/fixture-src`（可读 UTF-8 源）→ `node test/make-fixture.cjs` → `test/fixture-build`（`latest.log` 转 GB18030、历史日志转 `.gz`、写入同名不同版本的假 jar）→ 压缩为 `test/fixture.zip`。脚本不包含压缩步骤，需外部打包。
+夹具生成链路：`test/fixture-src`（可读 UTF-8 源）→ `npm run test:fixture`（即 `node test/make-fixture.cjs`）→ 同时产出 `test/fixture-build`（`latest.log` 转 GB18030、历史日志转 `.gz`、写入同名不同版本的假 jar）与 `test/fixture.zip`。压缩由脚本内嵌的最小 ZIP 写入器完成（Node 标准库 `zlib` + 手写中央目录），不引入 `yazl` / `archiver`，也不依赖 PowerShell，跨平台字节一致。`test/fixture.zip` 属于生成产物、不入库，由 `pretest:pipeline` 与 `pretest:e2e` 自动重建，因此干净仓库直接跑测试即可。
 
-端到端脚本的设计意图是「守卫验证」而非「成功验证」：它故意在未开启自动分析时调用 `trigger: 'auto'`，期望得到拦截错误（若输出 `LEAKED` 则说明守卫失效），以此确认自动调用不会绕过设置。脚本还会临时构造 PCL2 目录，经 `launcher:refresh` 走一遍真实 IPC，确认默认 `disabled`、解析结果正确，且分析结果中的环境字段不被覆盖。脚本本身不含断言，只有抛出异常或超时才以非零码退出，正常路径下需人工判读输出。
+端到端脚本的设计意图是「守卫验证」而非「成功验证」：它故意在未开启自动分析时调用 `trigger: 'auto'`，期望得到拦截错误（若输出 `LEAKED` 则说明守卫失效），以此确认自动调用不会绕过设置。脚本还会临时构造 PCL2 目录，经 `launcher:refresh` 走一遍真实 IPC，确认默认 `disabled`、解析结果正确，且分析结果中的环境字段不被覆盖。脚本带断言，任一失败即以 1 退出；另含两条哨兵断言——`root` 有子节点（CSP 收紧后若拦下打包脚本会立刻失败）、`window.api.platform` 可用（`sandbox: true` 下 preload 与 `contextBridge` 仍工作）。
 
 ## 9. 构建与分发
 
@@ -453,14 +455,12 @@ analysis:run
 
 | 问题 | 位置 | 影响 |
 | --- | --- | --- |
-| `useRuleEngine` 未接入 | `settings.ts` 定义、`SettingsDrawer.tsx` 展示、`base.ts` 未读取 | 开关无实际效果，规则始终执行 |
 | 历史日志提示与实际行为矛盾 | `base.ts` 的 `notes.push` 条件要求「有历史候选且未加载历史」，实际几乎不可达 | 用户可能误以为历史日志未被分析，实际已纳入最多 4 份 |
 | `version_json` 只登记不解析 | `discover.ts` → `versionJsons` | 无法从 `versions/*.json` 补齐模组清单，弱信号因此缺失 |
 | `NOTE` 表重复维护 | `discover.ts` 与 `base.ts` 各一份 | 新增类型时两处都要改，文案容易不一致 |
 | 单文件类型判定粗糙 | `base.ts` 的 `loadSingleFile` 仅按文件名包含 `crash` / `hs_err` 判断 | 重命名过的崩溃报告会被当作 `other`，缺少 `parseCrashReport` 结构化 |
 | 模型输出无重试 | `index.ts` 的 `analysis:ai` | 非法 JSON 直接失败，需人工重试 |
 | 无单元测试框架 | 仅管线脚本与 E2E | 规则级回归缺少细粒度断言 |
-| E2E 无断言 | `tools/e2e.cjs` | 分析返回失败时仍以 0 退出，只能人工判读输出 |
 | 条目上限静默截断 | `extract.ts` 的 `MAX_ENTRIES` 分支 | 超出后用户不会收到提示，可能漏读文件 |
 | 无游戏启动流程 | — | 启动器配置只能补全分析环境，无法作为真正的启动参数来源 |
 | HMCL 配置布局启发式 | `launcher/hmcl.ts` | 实例无法定位时跳过内存/Java；不同 HMCL 版本的字段可能变化 |

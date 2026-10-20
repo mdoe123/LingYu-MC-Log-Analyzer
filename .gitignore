@@ -7,6 +7,7 @@ dist/
 release/
 test-dist/
 test/fixture-build/
+test/fixture.zip
 *.tsbuildinfo
 
 # 本地参考资料 / 第三方源码（含 HMCL、PCL2，勿提交）

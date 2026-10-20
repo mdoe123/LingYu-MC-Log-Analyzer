@@ -58,7 +58,9 @@ function createWindow(): void {
     },
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
-      sandbox: false,
+      // 渲染进程运行在 Chromium 沙箱内：preload 只保留 ipcRenderer / contextBridge / webUtils，
+      // 渲染层即使被注入也无法直接摸到 Node。回归点见 tools/e2e.cjs 的 apiPlatform 断言。
+      sandbox: true,
       contextIsolation: true,
       nodeIntegration: false
     }
@@ -279,9 +281,15 @@ function registerIpc(): void {
         }
 
         const sender = event.sender
-        const output = await analyzeArchive(request.path, request.name, stat.size, (progress) => {
-          if (!sender.isDestroyed()) sender.send('analysis:progress', progress)
-        })
+        const output = await analyzeArchive(
+          request.path,
+          request.name,
+          stat.size,
+          (progress) => {
+            if (!sender.isDestroyed()) sender.send('analysis:progress', progress)
+          },
+          { useRuleEngine: settings.useRuleEngine }
+        )
 
         applyLauncherDefaults(output.base, launcherProfile)
         lastContext = { base: output.base, sources: output.sources, modJars: output.modJars }
@@ -312,9 +320,14 @@ function registerIpc(): void {
         }
 
         const sender = event.sender
-        const output = await analyzeGameDir(request.path, basename(request.path), (progress) => {
-          if (!sender.isDestroyed()) sender.send('analysis:progress', progress)
-        })
+        const output = await analyzeGameDir(
+          request.path,
+          basename(request.path),
+          (progress) => {
+            if (!sender.isDestroyed()) sender.send('analysis:progress', progress)
+          },
+          { useRuleEngine: settings.useRuleEngine }
+        )
 
         applyLauncherDefaults(output.base, launcherProfile)
         lastContext = { base: output.base, sources: output.sources, modJars: output.modJars }

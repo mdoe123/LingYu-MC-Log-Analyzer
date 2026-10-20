@@ -79,6 +79,9 @@ async function main(): Promise<void> {
   console.log(`\n=== 证据包 ${pack.length} 字符 ===`)
   console.log(pack.slice(0, 2200))
 
+  console.log('\n=== 规则引擎开关 ===')
+  await runRuleEngineChecks()
+
   console.log('\n=== 启动器配置联动 ===')
   await runLauncherChecks(base)
 
@@ -250,6 +253,49 @@ async function runDirectoryChecks(): Promise<void> {
 
   if (failures.length > 0) {
     throw new Error(`目录分析检查失败：${failures.join('；')}`)
+  }
+}
+
+async function runRuleEngineChecks(): Promise<void> {
+  const failures: string[] = []
+  const check = (name: string, condition: boolean, detail?: string): void => {
+    if (condition) {
+      console.log(`  PASS ${name}`)
+      return
+    }
+    failures.push(name)
+    console.log(`  FAIL ${name}${detail ? ` — ${detail}` : ''}`)
+  }
+
+  const file = resolve('test/fixture.zip')
+  const stat = await fs.stat(file)
+  const silent = (): undefined => undefined
+
+  const on = await analyzeArchive(file, 'fixture.zip', stat.size, silent, { useRuleEngine: true })
+  const off = await analyzeArchive(file, 'fixture.zip', stat.size, silent, { useRuleEngine: false })
+
+  check('默认（不传 options）等同开启', on.base.findings.length > 0, String(on.base.findings.length))
+  check('开启时有命中', on.base.findings.some((item) => item.id === 'mixin'))
+  check('开启时有嫌疑', on.base.suspects.length > 0)
+  check('开启时有关键词统计', on.base.signatures.length > 0)
+
+  check('关闭后无命中', off.base.findings.length === 0, String(off.base.findings.length))
+  check('关闭后无嫌疑', off.base.suspects.length === 0, String(off.base.suspects.length))
+  check('关闭后无关键词统计', off.base.signatures.length === 0, String(off.base.signatures.length))
+  check('关闭后在说明中告知', off.base.notes.some((note) => note.includes('规则引擎')))
+  check(
+    '关闭后仍保留文件与环境',
+    off.base.files.length === on.base.files.length && off.base.environment.loader === on.base.environment.loader
+  )
+  check('关闭后阶段判定不受影响', off.base.stageGuess.stage === on.base.stageGuess.stage)
+
+  const dirOff = await analyzeGameDir(resolve('test/fixture-build'), 'fixture-build', silent, {
+    useRuleEngine: false
+  })
+  check('目录模式同样受开关控制', dirOff.base.findings.length === 0, String(dirOff.base.findings.length))
+
+  if (failures.length > 0) {
+    throw new Error(`规则引擎开关检查失败：${failures.join('；')}`)
   }
 }
 

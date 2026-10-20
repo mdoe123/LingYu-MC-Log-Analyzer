@@ -9,7 +9,10 @@
     "start": "electron-vite preview",
     "dev:web": "vite --config vite.web.config.ts",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "test:fixture": "node test/make-fixture.cjs",
+    "pretest:pipeline": "npm run test:fixture",
     "test:pipeline": "vite build --config vite.test.config.ts && node test-dist/run.cjs",
+    "pretest:e2e": "npm run test:fixture",
     "test:e2e": "electron-vite build && electron tools/e2e.cjs",
     "pack": "electron-vite build && electron-builder --dir",
     "dist": "electron-vite build && electron-builder --win"
