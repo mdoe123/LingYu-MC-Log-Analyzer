@@ -1,0 +1,9 @@
+[09:12:01] [main/INFO] [minecraft/Main]: Launching target 'forgeclient' with 47 mods
+[09:12:02] [main/INFO] [ForgeModLoader/]: Found mod file embeddium-0.3.25.jar
+[09:12:03] [main/INFO] [mixin/]: SpongePowered MIXIN Subsystem version 0.8.5
+[09:12:05] [Render thread/INFO] [minecraft/Minecraft]: Setting user: Steve
+[09:12:06] [Render thread/ERROR] [minecraft/ModList]: java.lang.ClassNotFoundException: com.simibubi.create.compat.cloth.CreateClothConfig
+[09:12:06] [Render thread/ERROR] [minecraft/ModList]: 	at java.base/java.lang.Class.forName0(Native Method)
+[09:12:06] [Render thread/ERROR] [minecraft/ModList]: 	at com.example.createaddon.CreateAddonClient.init(CreateAddonClient.java:31)
+[09:12:06] [Render thread/WARN] [minecraft/Minecraft]: Failed to load optional config screen for createaddon
+[09:12:09] [Render thread/INFO] [minecraft/Minecraft]: Sound engine started

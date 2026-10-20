@@ -1,0 +1,55 @@
+{
+  "name": "lingyu-mc-log-analyzer",
+  "version": "0.1.0",
+  "description": "灵羽的MC日志分析器（LingYu MC Log Analyzer）— Minecraft 日志 AI 分析工具",
+  "main": "./out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "start": "electron-vite preview",
+    "dev:web": "vite --config vite.web.config.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "test:pipeline": "vite build --config vite.test.config.ts && node test-dist/run.cjs",
+    "test:e2e": "electron-vite build && electron tools/e2e.cjs",
+    "pack": "electron-vite build && electron-builder --dir",
+    "dist": "electron-vite build && electron-builder --win"
+  },
+  "keywords": [
+    "minecraft",
+    "log",
+    "electron",
+    "ai"
+  ],
+  "author": "LingYu MC Log Analyzer Contributors",
+  "license": "GPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mdoe123/LingYu-MC-Log-Analyzer.git"
+  },
+  "homepage": "https://github.com/mdoe123/LingYu-MC-Log-Analyzer#readme",
+  "bugs": {
+    "url": "https://github.com/mdoe123/LingYu-MC-Log-Analyzer/issues"
+  },
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
+  "dependencies": {
+    "chardet": "^2.2.0",
+    "iconv-lite": "^0.7.3",
+    "yauzl": "^3.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@types/yauzl": "^3.4.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "electron": "^44.9.1",
+    "electron-builder": "^26.15.3",
+    "electron-vite": "^6.0.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.4"
+  }
+}

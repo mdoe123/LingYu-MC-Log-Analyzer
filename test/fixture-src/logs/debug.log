@@ -1,0 +1,7 @@
+[12:04:28] [Render thread/DEBUG] [embeddium/]: Chunk render dispatcher started with 4 threads
+[12:04:28] [Render thread/DEBUG] [embeddium/]: Created terrain render pass, format RGBA16F
+[12:04:29] [Render thread/DEBUG] [oculus/]: Resolving uniform block layout for terrain
+[12:04:29] [Render thread/DEBUG] [oculus/]: Binding program 12, attributes 6
+[12:04:30] [Render thread/DEBUG] [mixin/]: Preparing mixin target net.minecraft.client.renderer.GameRenderer
+[12:04:31] [Render thread/DEBUG] [mixin/]: Rewriting net.minecraft.client.renderer.GameRenderer (oculus.mixins.json)
+[12:04:31] [Render thread/DEBUG] [mixin/]: Target method m_109093_ not found in GameRenderer

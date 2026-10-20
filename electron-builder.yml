@@ -1,0 +1,40 @@
+appId: com.lingyu.mclog
+productName: 灵羽的MC日志分析器
+copyright: Copyright © 2026 LingYu MC Log Analyzer Contributors
+
+directories:
+  output: dist
+  buildResources: build
+
+files:
+  - out/**/*
+  - package.json
+  - "!**/*.map"
+
+asar: true
+compression: normal
+
+win:
+  icon: build/icon.png
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: portable
+      arch:
+        - x64
+  artifactName: ${name}-${version}-${arch}.${ext}
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowElevation: true
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: 灵羽的MC日志分析器
+  artifactName: ${name}-${version}-setup.${ext}
+
+portable:
+  artifactName: ${name}-${version}-portable.${ext}
+  requestExecutionLevel: user

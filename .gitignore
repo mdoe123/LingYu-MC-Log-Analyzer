@@ -1,0 +1,38 @@
+# 依赖
+node_modules/
+
+# 构建产物
+out/
+dist/
+release/
+test-dist/
+test/fixture-build/
+*.tsbuildinfo
+
+# 本地参考资料 / 第三方源码（含 HMCL、PCL2，勿提交）
+qwq/
+.screens/
+
+# 工作区元数据与记忆（包含本地路径、对话记录，禁止提交）
+.workbuddy/
+
+# 本地配置与密钥
+.env
+.env.*
+*.local
+*.pem
+*.key
+settings.json
+
+# 日志
+*.log
+!test/fixture-src/**/*.log
+
+# 测试覆盖率
+coverage/
+
+# 操作系统 / 编辑器
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

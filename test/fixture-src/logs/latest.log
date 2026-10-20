@@ -1,0 +1,24 @@
+[12:04:26] [main/INFO] [minecraft/Main]: Launching target 'forgeclient' with 47 mods
+[12:04:26] [main/INFO] [ForgeModLoader/]: Found mod file embeddium-0.3.31.jar
+[12:04:26] [main/INFO] [ForgeModLoader/]: Found mod file embeddium-0.3.25.jar
+[12:04:26] [main/INFO] [ForgeModLoader/]: Found mod file oculus-1.7.0.jar
+[12:04:26] [main/INFO] [ForgeModLoader/]: Found mod file geckolib-forge-1.20.1-4.4.4.jar
+[12:04:27] [main/INFO] [mixin/]: SpongePowered MIXIN Subsystem version 0.8.5 source=file:/mods/oculus-1.7.0.jar
+[12:04:27] [main/INFO] [minecraft/Bootstrap]: 已加载语言文件 zh_cn.json，共 4120 条键值
+[12:04:28] [Render thread/INFO] [minecraft/Minecraft]: Setting user: Steve
+[12:04:28] [Render thread/INFO] [embeddium/]: Embeddium 0.3.31 initializing render pipeline
+[12:04:29] [Render thread/INFO] [oculus/]: Oculus 1.7.0 shader pipeline ready
+[12:04:29] [Render thread/INFO] [minecraft/GameRenderer]: Loading 42 shader programs
+[12:04:30] [Render thread/INFO] [minecraft/TextureManager]: Reloading ResourceManager: vanilla, mod_resources
+[12:04:30] [Worker-Main-3/WARN] [minecraft/ResourceManager]: Couldn't find resource minecraft:missingno
+[12:04:30] [Worker-Main-3/WARN] [minecraft/ResourceManager]: Couldn't find resource geckolib:textures/entity/unknown.png
+[12:04:31] [Render thread/ERROR] [mixin/]: Mixin apply for mod oculus failed
+[12:04:31] [Render thread/ERROR] [mixin/]: oculus.mixins.json:GameRendererMixin -> net.minecraft.client.renderer.GameRenderer
+[12:04:31] [Render thread/ERROR] [mixin/]: org.spongepowered.asm.mixin.injection.throwables.InvalidInjectionException: Critical injection failure: @Inject annotation on onResize could not find any targets matching 'm_109093_' in net.minecraft.client.renderer.GameRenderer
+[12:04:31] [Render thread/ERROR] [mixin/]: 	at oculus.mixin.GameRendererMixin.onResize(GameRendererMixin.java:88)
+[12:04:31] [Render thread/ERROR] [mixin/]: 	at net.minecraft.client.renderer.GameRenderer.m_109093_(GameRenderer.java:412)
+[12:04:31] [Render thread/ERROR] [mixin/]: Caused by: java.lang.NoSuchMethodError: 'org.joml.Matrix4f net.minecraft.client.renderer.GameRenderer.m_109093_()'
+[12:04:31] [Render thread/FATAL] [minecraft/Minecraft]: Unreported exception thrown!
+[12:04:31] [Render thread/FATAL] [minecraft/Minecraft]: Crash report saved to crash-reports/crash-2026-10-20_12.04.31-client.txt
+[12:04:32] [Render thread/WARN] [minecraft/Minecraft]: Stopping worker threads
+[12:04:32] [Render thread/INFO] [minecraft/Minecraft]: Stopping!

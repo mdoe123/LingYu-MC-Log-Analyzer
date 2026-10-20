@@ -1,0 +1,6 @@
+[12:03:55] [main/INFO] HMCL 3.5.7 启动，使用 Java 17.0.8 (Microsoft OpenJDK)
+[12:03:56] [main/INFO] 游戏目录: C:\Users\<user>\AppData\Roaming\.minecraft
+[12:03:58] [main/INFO] 启动版本 1.20.1-forge-47.3.0，最大内存 4096 MB
+[12:04:02] [main/INFO] 进程已启动，等待窗口创建
+[12:04:33] [main/WARN] 进程退出码 1，耗时 38 秒
+[12:04:33] [main/INFO] 检测到崩溃，已自动收集 crash-report
