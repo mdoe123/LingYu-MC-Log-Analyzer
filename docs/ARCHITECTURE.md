@@ -136,7 +136,7 @@ analyzeArchive(path, name, size, onProgress)
 3. `crash-YYYY-MM-DD*.txt` → `crash`；
 4. `hs_err_pid<pid>.log` → `hs_err`；
 5. `latest.log` → `latest`；
-6. `fml-client-latest.log` / `fml-server-latest.log` → `fml`；
+6. `fml-client-latest.log` / `fml-server-latest.log` → `fml`；`fml-junk-earlystartup.log`（Forge 1.12–1.16 的早期启动日志，模组发现阶段崩溃时是唯一有内容的文件）同样归入 `fml`；
 7. `debug.log` / `debug-N.log` → `debug`；
 8. `YYYY-MM-DD-N.log` → `history`；
 9. `hmcl*.log` / `pcl*.log` / `pcl2*.log` / `launcher*.log`，或路径含 `/hmcl/logs/` → `launcher`；
@@ -161,13 +161,16 @@ analyzeArchive(path, name, size, onProgress)
 
 ### 5.4 `parse.ts` — 行解析与堆栈块合并
 
-行前缀识别三种形态：
+行前缀识别四种形态，按信息量从多到少匹配：
 
-| 形态 | 正则 | 提取 |
-| --- | --- | --- |
-| Forge / FML | `^\[([^\]]*)\]\s*\[([^\]]*)\]\s*\[([^\]]*)\]:\s?(.*)$` | 时间 / 线程+级别 / logger / 正文 |
-| 括号 logger | `^\[([^\]]*)\]\s*\[([^\]]*)\]\s*\(([^)]*)\):\s?(.*)$` | 同上 |
-| 通用前缀 | `^(?:\[[^\]]*\]\s*)+` | 保留正文，第二个方括号视为线程 |
+| 形态 | 对应加载器 | 正则 | 提取 |
+| --- | --- | --- | --- |
+| 三段方括号 | Forge / NeoForge | `^\[([^\]]*)\]\s*\[([^\]]*)\]\s*\[([^\]]*)\]:\s?(.*)$` | 时间 / 线程+级别 / logger / 正文 |
+| 括号 logger | Quilt（Knot）、部分第三方启动器 | `^\[([^\]]*)\]\s*\[([^\]]*)\]\s*\(([^)]*)\):?\s?(.*)$` | 同上，冒号可省略 |
+| 无时间戳 | 启动器转发、部分服务端包装脚本 | `^\[([^\]]*\/[A-Za-z]+)\]:?\s*(?:\[([^\]]*)\]:?\s*)?(.*)$` | 首段必须是 `线程/级别`，否则不匹配 |
+| 通用前缀 | 原版 / Fabric / Quilt 标准形式 | `^(?:\[[^\]]*\]\s*)+` | 保留正文（并去掉残留的 `: `），第二个方括号视为线程 |
+
+Forge 系的 logger 常带结尾斜杠（`ModSorter/`、`mixin/`，来自 log4j2 的缩写 logger 写法），解析时统一去掉，使四个加载器的 `logger` 字段可比。
 
 级别从线程字段最后一个 `/` 之后提取（如 `Render thread/ERROR`），`WARNING` 归一为 `WARN`；提取失败时回退到正文中的 `/ERROR]`、`/WARN]`、`ERROR`、`WARN` 关键字。
 
@@ -182,18 +185,23 @@ analyzeArchive(path, name, size, onProgress)
 
 ### 5.5 `crash.ts` — 崩溃报告结构化
 
-从报告中抽取六项：
+四个加载器共用原版的报告骨架（`---- Minecraft Crash Report ----` / `Description:` / `Caused by:` / `-- System Details --`），差异在于各自追加的区块。抽取结果：
 
-| 字段 | 来源 |
-| --- | --- |
-| `description` | `^Description:\s*(.+)$` |
-| `causedByChain` | 全部 `Caused by:` 行，去重保序；最后一条即根因 |
-| `rootCause` | 链尾；无链时退化为异常类型 |
-| `exceptionType` | 首个匹配 `*Exception/*Error/*Throwable` 的全限定名 |
-| `firstForeignFrame` | 首个不在 `STACK_PREFIXES` 白名单内的 `at` 帧 |
-| `modCount` | `^Mod Count:\s*(\d+)` |
+| 字段 | 来源 | 加载器 |
+| --- | --- | --- |
+| `description` | `^Description:\s*(.+)$` | 通用 |
+| `causedByChain` | 全部 `Caused by:` 行，去重保序；最后一条即根因 | 通用 |
+| `rootCause` | 链尾；无链时退化为异常类型 | 通用 |
+| `exceptionType` | 首个匹配 `*Exception/*Error/*Throwable` 的全限定名 | 通用 |
+| `firstForeignFrame` | 首个不在 `STACK_PREFIXES` 白名单内的 `at` 帧 | 通用 |
+| `modCount` | `Mod Count:`；缺失时退回 `loaderMods` 长度 | 通用 / Fabric、Quilt |
+| `suspectedMods` | `Suspected Mods:` 区块（`NONE` 视为空）、`-- Mod loading issue for: <id> --`、Mod List 中 `ERRORED` 的项 | Forge、NeoForge |
+| `failedMods` | `provided by '<mod>'`、`Dependency for mod '<mod>' on …` | Fabric、Quilt |
+| `loaderMods` | `-- System Details --` 下的 `Fabric Mods:` 清单，格式 `\t\t<modid>: <名称> <版本>` | Fabric、Quilt |
 
-`STACK_PREFIXES` 覆盖原版、Forge、NeoForge、Fabric Loader、Mixin、Mojang、JDK、LWJGL、Netty 等基础设施包名。白名单之外的第一个帧通常就是问题模组，因此它同时是「首个非原版帧」展示项与嫌疑评分依据。
+`suspectedMods` 的括号写法（`Example Library (examplelib)`）只保留像 modid 的一侧：显示名带空格，无法与 jar 名比对，放进嫌疑表只会稀释排序。`loaderMods` 用于把 modid 回填成真实版本号，是「嫌疑列表能显示版本」的来源。
+
+`STACK_PREFIXES` 覆盖原版、Forge、NeoForge、Fabric、Fabric API、Quilt Loader、Quilt QSL、Mixin、Mojang、JDK、LWJGL、Netty 等基础设施包名。白名单之外的第一个帧通常就是问题模组，因此它同时是「首个非原版帧」展示项与嫌疑评分依据。
 
 `head` 固定截取前 45 行，供界面展示与 AI 证据包使用。
 
@@ -201,7 +209,7 @@ analyzeArchive(path, name, size, onProgress)
 
 三件事在同一模块内完成。
 
-**(a) 规则匹配**：`runRules()` 是唯一入口，接收来自设置的 `useRuleEngine`；为 `false` 时整体短路，返回空的命中、嫌疑与关键词统计，并由调用方在 `notes` 中说明，避免「零命中」被误读为「没问题」。开启时 14 条静态规则（见 [RULES.md](RULES.md)）逐条扫描候选行。候选行的定义是：级别为 `ERROR` / `FATAL` / `WARN`，或正文包含 `Exception|Error|Caused by|Mixin|Missing|Duplicate|OutOfMemory`。每条规则最多收集 3 条证据，同一文件内行号相差小于 3 的锚点会被视为重复；证据正文优先取整段堆栈块（最多 14 行），否则取命中行前 2 行到后 6 行的窗口。
+**(a) 规则匹配**：`runRules()` 是唯一入口，接收来自设置的 `useRuleEngine` 与 `loader` 画像；`useRuleEngine` 为 `false` 时整体短路，返回空的命中、嫌疑与关键词统计，并由调用方在 `notes` 中说明，避免「零命中」被误读为「没问题」。开启时 18 条静态规则（见 [RULES.md](RULES.md)）逐条扫描候选行，其中 4 条带 `loaders` 声明，只在对应加载器下参与匹配（加载器未知时不设门槛）。候选行的定义是：级别为 `ERROR` / `FATAL` / `WARN`，或正文包含 `Exception|Error|Caused by|Mixin|Missing|Duplicate|OutOfMemory`。每条规则最多收集 3 条证据，同一文件内行号相差小于 3 的锚点会被视为重复；证据正文优先取整段堆栈块（最多 14 行），否则取命中行前 2 行到后 6 行的窗口。
 
 命中结果按严重级别升序排列（critical → low）。另外两条动态检查会插入列表前部：
 
@@ -353,6 +361,39 @@ analysis:run
 
 **边界**：便携版/重命名 JDK 无法保证发现；`reg.exe` 被安全策略禁止时该来源静默跳过；`java -version` 探测可能被杀软拦截；结果不是系统全量清单。
 
+### 5.12 `loader.ts` — 加载器识别
+
+四个加载器用同一套 `---- Minecraft Crash Report ----` 骨架，真正的差异在标识、行前缀与加载器专属区块。`loader.ts` 负责第一项，并为另外两项提供分派依据。
+
+**为什么用加权打分**：两条真实的重叠会让「首个命中即返回」误判——
+
+- NeoForge 1.20.1 由 Forge 分叉而来，包名仍是 `net.minecraftforge.*`；只看包名会判成 Forge。
+- Quilt 通过兼容层加载 Fabric 模组，日志里会出现 `net.fabricmc.*`；只看包名会判成 Fabric。
+
+因此每个特征带权重，按家族累加后取最高分；同分时按 `neoforge → forge → quilt → fabric` 的顺序取前者。版本号单独挑选：优先取带捕获组的特征，其次比权重。
+
+| 家族 | 主要特征（权重） |
+| --- | --- |
+| NeoForge | `Forge: net.neoforged:<loader>:<ver>` 行（110）、`--fml.neoForgeVersion`（100）、`net.neoforged.fml.`（90）、`neoforge.mods.toml`（90）、`Mod loading failures have occurred`（90）、`NeoForge:` 行（85）、`net.neoforged:` 冒号坐标（75） |
+| Forge | `--fml.forgeVersion`（100）、`net.minecraftforge.fml.`（90）、`Mod loading error has occurred`（90）、`Forge:` 行（85）、`FML:` 行（80） |
+| Quilt | `with Quilt Loader <ver>`（100）、`Quilt Loader <ver>`（95）、`org.quiltmc.loader.`（90）、`Incompatible mod set!`（90）、`Dependency for mod 'x' on quilt_`（90） |
+| Fabric | `with Fabric Loader <ver>`（100）、`net.fabricmc.loader.`（90）、`Incompatible mods found!`（90）、`Fabric Loader <ver>`（80）、`Fabric Mods:` 区块（70） |
+
+**抽样**：`detectionSample()` 对日志取首尾各 8 KB（启动行在头部，`FML:` / `Fabric Mods:` 这类 System Details 在尾部），崩溃报告放宽到 2 MB，避免把 48 MB 的日志整份拼进正则。
+
+**输出**：`{ family, version, evidence, scores }`。`evidence` 记录命中的最强特征，`scores` 保留各家族得分，便于定位误判。`unknown` 表示没有可判定的特征，此时规则的门槛被关闭，环境里也会写入一条说明。
+
+**四个加载器的其余差异**（分别落在 `parse.ts`、`crash.ts`、`rules.ts`）：
+
+| 项目 | Fabric | Quilt | Forge | NeoForge |
+| --- | --- | --- | --- | --- |
+| 日志行前缀 | `[时间] [线程/级别]: 正文` | 同上，另见 `(QuiltLoader)` 括号形式 | `[时间] [线程/级别] [logger]: 正文` | 同 Forge |
+| 依赖失败是否产出 crash-report | 否，只在 `latest.log` | 否 | 是 | 是 |
+| 依赖失败措辞 | `Incompatible mods found!` / `requires … which is missing!` | `Incompatible mod set!` / `Dependency for mod 'x' on …` | `Missing or unsupported mandatory dependencies` | 同 Forge |
+| 加载中止措辞 | `Could not execute entrypoint stage` | 同 Fabric | `Mod loading error has occurred` | `Mod loading failures have occurred` |
+| 崩溃报告点名区块 | —（`provided by '<mod>'`） | —（`Dependency for mod`） | `Suspected Mods:`、Mod List `ERRORED` | `-- Mod loading issue for: <id> --` |
+| 模组清单 | `Fabric Mods:` | `Fabric Mods:`（沿用键名） | Mod List（格式随版本变化大，未解析） | 未提供 |
+
 ## 6. 安全与资源边界
 
 | 边界 | 实现 |
@@ -434,7 +475,7 @@ analysis:run
 
 | 层级 | 入口 | 覆盖内容 |
 | --- | --- | --- |
-| 管线测试 | `npm run test:pipeline` | 夹具压缩包的完整基础分析、编码转换（GB18030 / gzip）、规则命中、嫌疑评分、证据包生成；**规则引擎开关**（开启有命中/嫌疑/关键词，关闭三者皆空且说明中告知，文件、环境与阶段不受影响，目录模式同样受控）；启动器配置解析与回退（PCL2 / HMCL / 路径无效 / JSON 损坏）、环境补全与不覆盖；目录分析（结构识别、崩溃报告、重复模组、跳过 assets、空目录报错）；Java 扫描（版本/架构归一、release 解析、无效项、候选去重、`JAVA_HOME`、空结果）。共 54 项，任一失败非零退出 |
+| 管线测试 | `npm run test:pipeline` | 夹具压缩包的完整基础分析、编码转换（GB18030 / gzip）、规则命中、嫌疑评分、证据包生成；**规则引擎开关**（开启有命中/嫌疑/关键词，关闭三者皆空且说明中告知，文件、环境与阶段不受影响，目录模式同样受控）；**加载器适配**（四类识别与版本读取、NeoForge 与 Quilt 的优先级、四种行前缀、按加载器开关规则、崩溃报告点名与模组清单、点名模组排首位）；启动器配置解析与回退（PCL2 / HMCL / 路径无效 / JSON 损坏）、环境补全与不覆盖；目录分析（结构识别、崩溃报告、重复模组、跳过 assets、空目录报错）；Java 扫描（版本/架构归一、release 解析、无效项、候选去重、`JAVA_HOME`、空结果）。共 98 项，任一失败非零退出 |
 | 端到端 | `npm run test:e2e` | 真实 Electron 窗口内的 IPC 往返、自动 AI 守卫、行号定位、启动器联动、目录分析，另外验证渲染层挂载与 preload 桥接。共 24 项断言，失败即 `app.exit(1)` |
 | 类型检查 | `npm run typecheck` | 主进程与预加载（`tsconfig.node.json`）＋ 渲染层（`tsconfig.web.json`） |
 
@@ -457,6 +498,8 @@ analysis:run
 | --- | --- | --- |
 | 历史日志提示与实际行为矛盾 | `base.ts` 的 `notes.push` 条件要求「有历史候选且未加载历史」，实际几乎不可达 | 用户可能误以为历史日志未被分析，实际已纳入最多 4 份 |
 | `version_json` 只登记不解析 | `discover.ts` → `versionJsons` | 无法从 `versions/*.json` 补齐模组清单，弱信号因此缺失 |
+| Forge Mod List 未解析 | `crash.ts` 只取 `ERRORED` 标记，未解析完整清单 | 无法像 Fabric 那样回填模组名与版本；Forge 场景的嫌疑列表只有 modid |
+| 加载器识别依赖版本行 | `loader.ts` 的加权打分 | 输入只剩被截断的片段时可能判为 `unknown`，此时全部规则放开，存在跨加载器误报可能 |
 | `NOTE` 表重复维护 | `discover.ts` 与 `base.ts` 各一份 | 新增类型时两处都要改，文案容易不一致 |
 | 单文件类型判定粗糙 | `base.ts` 的 `loadSingleFile` 仅按文件名包含 `crash` / `hs_err` 判断 | 重命名过的崩溃报告会被当作 `other`，缺少 `parseCrashReport` 结构化 |
 | 模型输出无重试 | `index.ts` 的 `analysis:ai` | 非法 JSON 直接失败，需人工重试 |

@@ -2,6 +2,8 @@ import type {
   CrashSummary,
   Environment,
   EvidenceItem,
+  LoaderFamily,
+  LoaderMod,
   RuleFix,
   RuleHit,
   ScannedFile,
@@ -10,6 +12,7 @@ import type {
   StageGuess,
   Suspect
 } from '../../shared/types'
+import { describeLoader, type LoaderProfile } from './loader'
 import { blockAt, lineNumberOf, type ParsedLog } from './parse'
 
 export interface LogSource {
@@ -24,6 +27,11 @@ interface RuleDef {
   title: string
   detail: string
   fixes: RuleFix[]
+  /**
+   * 限定规则只在特定加载器下生效。未声明表示通用规则。
+   * 加载器无法判定（`unknown`）时不启用门槛，避免因识别失败而漏报。
+   */
+  loaders?: LoaderFamily[]
 }
 
 const RULES: RuleDef[] = [
@@ -135,7 +143,12 @@ const RULES: RuleDef[] = [
   {
     id: 'missing-dep',
     severity: 'high',
-    pattern: /Missing or unsupported mandatory dependencies|which is missing|requires .* (?:of|from) (?:mod|modid)/i,
+    // 覆盖四种加载器的原文措辞：
+    //   Forge / NeoForge: Missing or unsupported mandatory dependencies
+    //   Fabric:           ... requires ... which is missing! / requires ... of mod ...
+    //   Quilt:            Dependency for mod '<id>' on quilt_loader|quilted_fabric_api|...
+    pattern:
+      /Missing or unsupported mandatory dependencies|which is missing|requires .* (?:of|from) (?:mod|modid)|Dependency for mod '[^']+' on /i,
     title: '缺少必需的前置模组',
     detail: '加载器在解析依赖时发现某个模组声明的前置不存在，或版本超出声明区间。这类失败发生在加载早期，与游戏内表现无关。',
     fixes: [
@@ -307,6 +320,116 @@ const RULES: RuleDef[] = [
         detail: '把 datapacks 目录中新增的包移出后重启，观察该警告是否消失。'
       }
     ]
+  },
+  {
+    id: 'fabric-quilt-incompatible',
+    severity: 'critical',
+    // Fabric Loader: Incompatible mods found!  /  Quilt Loader: Incompatible mod set!
+    pattern: /Incompatible mods found!|Incompatible mod set!|Some of your mods are incompatible/,
+    title: '模组集合不兼容，加载器拒绝启动',
+    detail:
+      'Fabric / Quilt 在游戏主类启动前完成依赖解析，一旦发现缺失或冲突就直接中止，不会生成 crash-report，因此 latest.log 是唯一证据。日志中逐条列出的 requires 行指名了缺失项，紧跟在 A potential solution has been determined（或中文「确定了一种可能的解决方法」）之后的段落是加载器自己给出的处理建议。',
+    fixes: [
+      {
+        level: 'immediate',
+        title: '逐条补齐 requires 行点名的模组',
+        detail:
+          '形如 "mod X requires fabric-api 0.92.0 or later" 的行，表示 X 需要该前置的指定版本或更高。只安装同 Minecraft 版本、同加载器的构建。'
+      },
+      {
+        level: 'try',
+        title: '阅读加载器给出的建议段落',
+        detail:
+          'A potential solution has been determined: 之后的每条 "- " 建议都由加载器生成，通常直接说明是缺前置、版本不符还是 Java 版本不够。'
+      },
+      {
+        level: 'diagnose',
+        title: '确认没有混入其它加载器的 jar',
+        detail:
+          'Fabric 只能加载 fabric.mod.json 的模组，Forge / NeoForge 的 jar 放进来不会被识别，反而会让依赖解析出现「缺少某模组」的假象。'
+      }
+    ],
+    loaders: ['fabric', 'quilt']
+  },
+  {
+    id: 'forge-neoforge-mod-loading',
+    severity: 'critical',
+    // Forge: Mod loading error has occurred  /  NeoForge: Mod loading failures have occurred
+    pattern:
+      /Mod loading error has occurred|Mod loading failures have occurred|An exception was thrown, the game will display an error screen and halt|net\.neoforged\.fml\.ModLoadingException|FatalStartupException/,
+    title: '模组加载阶段被加载器中止',
+    detail:
+      'Forge / NeoForge 在构建模组容器时捕获到致命异常并中止启动，游戏窗口根本不会出现。这条只是加载器的总括说明，真正原因在紧随其后的 Caused by 链末端；NeoForge 还会为每个出问题的模组单独输出 -- Mod loading issue for: <modid> -- 区块。',
+    fixes: [
+      {
+        level: 'immediate',
+        title: '从最后一条 Caused by 读起',
+        detail:
+          '加载器会把原始异常层层包装，「Mod loading has failed」只是最外层。向下找到最后一条 Caused by，那才是第一个真正出错的位置。'
+      },
+      {
+        level: 'try',
+        title: '核对报错模组的加载器归属',
+        detail:
+          'Forge 与 NeoForge 自 1.20.1 之后已经分家，jar 不通用。模组页面标注的是哪个加载器，就必须装哪个版本。'
+      },
+      {
+        level: 'diagnose',
+        title: '查看崩溃报告的 Mod List 状态列',
+        detail:
+          'Forge 崩溃报告的 Mod List 为每个模组标注状态码，出现 ERRORED 的那一项就是加载失败的模组。'
+      }
+    ],
+    loaders: ['forge', 'neoforge']
+  },
+  {
+    id: 'loader-wrong-build',
+    severity: 'high',
+    // NeoForge 的拒收提示；Forge / NeoForge 共有的构造函数失败
+    pattern:
+      /is not a valid mod file|is for Minecraft Forge or an older version of NeoForge|Failed to create mod instance/,
+    title: '模组构建与当前加载器不匹配',
+    detail:
+      '加载器在读取模组元数据或执行模组构造函数时失败。is for Minecraft Forge or an older version of NeoForge 说明这个 jar 是 Forge 构建，被放进了 NeoForge；Failed to create mod instance 则是模组构造函数抛错，多见于版本错配或缺少前置。',
+    fixes: [
+      {
+        level: 'immediate',
+        title: '换成与加载器一致的构建',
+        detail:
+          '同一个模组在 Forge 与 NeoForge 上是两份不同的 jar：Forge 用 mods.toml，NeoForge 用 neoforge.mods.toml。按日志点名的文件名替换。'
+      },
+      {
+        level: 'try',
+        title: '单独测试该模组',
+        detail:
+          '把它从 mods 目录移出后启动：能进游戏即确认问题在它，再去找匹配当前加载器版本号的构建。'
+      }
+    ],
+    loaders: ['forge', 'neoforge']
+  },
+  {
+    id: 'fabric-entrypoint',
+    severity: 'critical',
+    // Fabric: Could not execute entrypoint stage 'main' due to errors, provided by '<mod>' at '<class>'!
+    pattern: /Could not execute entrypoint stage|EntrypointNotFoundException|Failed to execute entrypoint/,
+    title: '模组入口点执行失败',
+    detail:
+      'Fabric / Quilt 在调用模组注册的入口点（通常是 onInitialize）时抛出异常。provided by 之后的名字就是出错的模组 id，但真正的异常仍在 Caused by 链里——入口点失败往往只是被波及的表层。',
+    fixes: [
+      {
+        level: 'immediate',
+        title: '读取 provided by 后的模组名',
+        detail:
+          '该模组在初始化阶段就失败了。先确认它的前置是否齐全，再考虑更新或回退它本身。'
+      },
+      {
+        level: 'try',
+        title: '确认它不是被 Mixin 失败连带拖垮',
+        detail:
+          '若同一段日志里先出现 Mixin apply failed，把 Mixin 冲突处理完之后这个入口点错误通常会自行消失。'
+      }
+    ],
+    loaders: ['fabric', 'quilt']
   }
 ]
 
@@ -382,6 +505,38 @@ export function buildSuspects(input: {
   const mods = input.modJars.map((jar) => ({ jar, ...parseJarName(jar) }))
   const seeds: SuspectSeed[] = []
 
+  // 崩溃报告里的模组清单（Fabric / Quilt 的 `Fabric Mods:`）用于把 modid 还原成
+  // 显示名与版本；加载器自己点名的模组优先于堆栈推断。
+  const loadedMods = new Map<string, LoaderMod>()
+  for (const crash of input.crashReports) {
+    for (const mod of crash.loaderMods ?? []) {
+      if (!loadedMods.has(mod.id)) loadedMods.set(mod.id, mod)
+    }
+  }
+
+  for (const crash of input.crashReports) {
+    for (const name of crash.suspectedMods ?? []) {
+      const known = loadedMods.get(name)
+      seeds.push({
+        name: known?.id ?? name,
+        version: known?.version,
+        reason: '崩溃报告点名该模组（加载器自身判定）',
+        score: 76,
+        kind: 'mod'
+      })
+    }
+    for (const name of crash.failedMods ?? []) {
+      const known = loadedMods.get(name)
+      seeds.push({
+        name: known?.id ?? name,
+        version: known?.version,
+        reason: '加载器声明该模组加载失败',
+        score: 68,
+        kind: 'mod'
+      })
+    }
+  }
+
   for (const source of input.sources) {
     for (let i = 0; i < source.log.lines.length; i += 1) {
       const line = source.log.lines[i]
@@ -421,11 +576,27 @@ export function buildSuspects(input: {
     }
   }
 
+  // Quilt 的措辞：Dependency for mod 'X' on quilt_loader 0.x —— X 是缺前置的模组，
+  // `on` 之后才是缺失项，两者都要进嫌疑表但分数不同。
+  const quiltDepRe = /Dependency for mod '([^']+)' on ([\w-]{3,})/gi
+
   const dependencyRe = /(?:requires|missing|需|需要)\s+([\w-]{3,})/gi
   for (const source of input.sources) {
     for (const index of candidateIndices(source.log)) {
       const line = source.log.lines[index]
-      if (!/missing|requires|依赖/i.test(line)) continue
+      if (!/missing|requires|依赖|dependency/i.test(line)) continue
+
+      quiltDepRe.lastIndex = 0
+      let quiltMatch: RegExpExecArray | null
+      while ((quiltMatch = quiltDepRe.exec(line)) !== null) {
+        const owner = quiltMatch[1].toLowerCase()
+        const missing = quiltMatch[2].toLowerCase()
+        if (owner !== missing) {
+          seeds.push({ name: owner, reason: '该模组声明的 Quilt 前置未满足', score: 30, kind: 'mod' })
+        }
+        seeds.push({ name: missing, reason: '日志声明缺少该前置（Quilt 依赖解析）', score: 55, kind: 'mod' })
+      }
+
       dependencyRe.lastIndex = 0
       let match: RegExpExecArray | null
       while ((match = dependencyRe.exec(line)) !== null) {
@@ -496,8 +667,9 @@ export function buildSuspects(input: {
 }
 
 /**
- * 规则引擎总入口。`useRuleEngine` 为 false 时整体短路：不跑 14 条静态签名、
+ * 规则引擎总入口。`useRuleEngine` 为 false 时整体短路：不跑 18 条静态签名、
  * 不跑 hs_err / duplicate-mods 动态检查、不做嫌疑评分与关键词统计。
+ * 传入 `loader` 后会按加载器家族开关带 `loaders` 声明的规则。
  * 此时调用方负责在 notes 中说明，避免用户误以为“没有命中”等于“没有问题”。
  */
 export function runRules(input: {
@@ -506,15 +678,20 @@ export function runRules(input: {
   hasHsErr: boolean
   modJars: string[]
   useRuleEngine?: boolean
+  loader?: LoaderProfile
 }): { findings: RuleHit[]; suspects: Suspect[]; signatures: SignatureCount[] } {
   if (input.useRuleEngine === false) {
     return { findings: [], suspects: [], signatures: [] }
   }
 
+  const family = input.loader?.family ?? 'unknown'
   const candidates = input.sources.map((source) => ({ source, indices: candidateIndices(source.log) }))
   const findings: RuleHit[] = []
 
   for (const rule of RULES) {
+    // 加载器已知时按家族过滤；未知时不做门槛，避免识别失败导致整类规则静默失效。
+    if (rule.loaders && family !== 'unknown' && !rule.loaders.includes(family)) continue
+
     const evidence: EvidenceItem[] = []
     for (const { source, indices } of candidates) {
       for (const index of indices) {
@@ -748,6 +925,7 @@ function firstMatch(texts: string[], pattern: RegExp): RegExpExecArray | null {
 export function extractEnvironment(input: {
   crashReports: CrashSummary[]
   sources: LogSource[]
+  loader?: LoaderProfile
 }): Environment {
   const heads = input.crashReports.map((crash) => crash.head)
   const logHeads = input.sources.map((source) => source.log.lines.slice(0, 400).join('\n'))
@@ -770,24 +948,54 @@ export function extractEnvironment(input: {
   const memory = firstMatch(heads, /^Memory:\s*\d+\s*bytes.*?up to\s*(\d+)\s*bytes/m)
   if (memory) env.memoryMaxMb = Math.round(Number(memory[1]) / 1048576)
 
-  const forge = firstMatch(all, /--fml\.forgeVersion\s+(\S+)/)
-  const neo = firstMatch(all, /--fml\.neoForgeVersion\s+(\S+)/)
-  const fabric = firstMatch(all, /Loading Minecraft [\d.]+ with Fabric Loader ([\d.]+)/)
-  const fabricAlt = firstMatch(all, /Fabric Loader\s+([\d.]+)/)
-  const quilt = firstMatch(all, /Quilt Loader\s+([\d.]+)/)
-  const neoHeader = firstMatch(heads, /^NeoForge:\s*(\S+)/m)
-  const fmlHeader = firstMatch(heads, /^FML:\s*([\d.]+)/m)
+  // 加载器优先取 loader.ts 的加权判定结果；只有完全识别不出时才退回到逐条正则。
+  if (input.loader && input.loader.family !== 'unknown') {
+    env.loaderFamily = input.loader.family
+    env.loader = describeLoader(input.loader)
+  } else {
+    const forge = firstMatch(all, /--fml\.forgeVersion\s+(\S+)/)
+    const neo = firstMatch(all, /--fml\.neoForgeVersion\s+(\S+)/)
+    const fabric = firstMatch(all, /Loading Minecraft [\d.]+ with Fabric Loader ([\d.]+)/)
+    const fabricAlt = firstMatch(all, /Fabric Loader\s+([\d.]+)/)
+    const quilt = firstMatch(all, /Quilt Loader\s+([\d.]+)/)
+    const neoHeader = firstMatch(heads, /^[ \t]*NeoForge:\s*(\S+)/m)
+    const fmlHeader = firstMatch(heads, /^[ \t]*FML:\s*([\d.]+)/m)
 
-  if (neo) env.loader = `NeoForge ${neo[1]}`
-  else if (neoHeader) env.loader = `NeoForge ${neoHeader[1]}`
-  else if (forge) env.loader = `Forge ${forge[1]}`
-  else if (fmlHeader) env.loader = `Forge ${fmlHeader[1]}`
-  else if (quilt) env.loader = `Quilt ${quilt[1]}`
-  else if (fabric) env.loader = `Fabric ${fabric[1]}`
-  else if (fabricAlt) env.loader = `Fabric ${fabricAlt[1]}`
-  else if (/neoforge/i.test(all.join('\n'))) env.loader = 'NeoForge（版本未知）'
-  else if (/net\.minecraftforge|forge mod loader/i.test(all.join('\n'))) env.loader = 'Forge（版本未知）'
-  else if (/net\.fabricmc|fabric loader/i.test(all.join('\n'))) env.loader = 'Fabric（版本未知）'
+    if (neo) {
+      env.loaderFamily = 'neoforge'
+      env.loader = `NeoForge ${neo[1]}`
+    } else if (neoHeader) {
+      env.loaderFamily = 'neoforge'
+      env.loader = `NeoForge ${neoHeader[1]}`
+    } else if (forge) {
+      env.loaderFamily = 'forge'
+      env.loader = `Forge ${forge[1]}`
+    } else if (fmlHeader) {
+      env.loaderFamily = 'forge'
+      env.loader = `Forge ${fmlHeader[1]}`
+    } else if (quilt) {
+      env.loaderFamily = 'quilt'
+      env.loader = `Quilt ${quilt[1]}`
+    } else if (fabric) {
+      env.loaderFamily = 'fabric'
+      env.loader = `Fabric ${fabric[1]}`
+    } else if (fabricAlt) {
+      env.loaderFamily = 'fabric'
+      env.loader = `Fabric ${fabricAlt[1]}`
+    } else if (/neoforge/i.test(all.join('\n'))) {
+      env.loaderFamily = 'neoforge'
+      env.loader = 'NeoForge（版本未知）'
+    } else if (/net\.minecraftforge|forge mod loader/i.test(all.join('\n'))) {
+      env.loaderFamily = 'forge'
+      env.loader = 'Forge（版本未知）'
+    } else if (/net\.quiltmc|quilt loader/i.test(all.join('\n'))) {
+      env.loaderFamily = 'quilt'
+      env.loader = 'Quilt（版本未知）'
+    } else if (/net\.fabricmc|fabric loader/i.test(all.join('\n'))) {
+      env.loaderFamily = 'fabric'
+      env.loader = 'Fabric（版本未知）'
+    }
+  }
 
   const modCount = input.crashReports.find((crash) => crash.modCount !== undefined)?.modCount
   if (modCount !== undefined) env.modCount = modCount

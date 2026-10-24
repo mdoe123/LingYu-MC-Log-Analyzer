@@ -64,7 +64,10 @@ function classify(path: string): { kind: LogFileKind; gzip: boolean } | null {
   if (/^crash-\d{4}-\d{2}-\d{2}.*\.txt$/.test(stem)) return { kind: 'crash', gzip }
   if (/^hs_err_pid\d+\.log$/.test(stem)) return { kind: 'hs_err', gzip }
   if (stem === 'latest.log') return { kind: 'latest', gzip }
+  // Forge 1.12–1.16 的加载器日志：fml-client-latest.log / fml-server-latest.log，
+  // 以及早期启动阶段的 fml-junk-earlystartup.log（模组发现阶段就崩溃时唯一有内容的文件）。
   if (/^fml-(client|server)-latest\.log$/.test(stem)) return { kind: 'fml', gzip }
+  if (stem === 'fml-junk-earlystartup.log') return { kind: 'fml', gzip }
   if (/^debug(-\d+)?\.log$/.test(stem)) return { kind: 'debug', gzip }
   if (/^\d{4}-\d{2}-\d{2}-\d+\.log$/.test(stem)) return { kind: 'history', gzip }
   if (/^(hmcl|pcl|pcl2|launcher)[\w.-]*\.log$/.test(stem) || lower.includes('/hmcl/logs/')) {

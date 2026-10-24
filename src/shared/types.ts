@@ -26,9 +26,17 @@ export interface ScannedFile {
   truncated: boolean
 }
 
+/**
+ * 模组加载器家族。用于按加载器开关规则、选择崩溃报告区块的解析方式。
+ * `unknown` 表示输入里没有可判定的加载器特征（原版或日志被截断）。
+ */
+export type LoaderFamily = 'fabric' | 'quilt' | 'forge' | 'neoforge' | 'unknown'
+
 export interface Environment {
   launcher?: string
   loader?: string
+  /** 与 `loader` 对应的家族，便于下游按加载器分派逻辑 */
+  loaderFamily?: LoaderFamily
   mcVersion?: string
   javaVersion?: string
   os?: string
@@ -77,6 +85,12 @@ export interface Suspect {
   kind: 'mod' | 'plugin' | 'loader' | 'java' | 'config' | 'unknown'
 }
 
+export interface LoaderMod {
+  id: string
+  name?: string
+  version?: string
+}
+
 export interface CrashSummary {
   file: string
   description: string
@@ -85,6 +99,12 @@ export interface CrashSummary {
   firstForeignFrame?: string
   exceptionType?: string
   modCount?: number
+  /** 加载器自己在报告中点名的模组（Forge 的 `Suspected Mods:`、NeoForge 的 `Mod loading issue for:`） */
+  suspectedMods?: string[]
+  /** 加载器声明的加载失败模组（Fabric 的 `provided by '<mod>'` 等） */
+  failedMods?: string[]
+  /** 崩溃报告内的模组清单，Fabric / Quilt 在 `-- System Details --` 中提供 */
+  loaderMods?: LoaderMod[]
   head: string
 }
 

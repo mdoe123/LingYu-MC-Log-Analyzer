@@ -26,8 +26,21 @@ export interface ParsedLog {
 
 const MAX_LINES = 300000
 
+/**
+ * 四种日志行前缀，按「信息量从多到少」排列：
+ *
+ * 1. Forge / NeoForge：`[12:04:27] [main/INFO] [net.minecraftforge.fml.loading.ModSorter/]: msg`
+ *    第三段是 logger，Forge 侧习惯带一个结尾斜杠（log4j2 的 `%c{1.}` 摘要形式）。
+ * 2. Fabric / Quilt 及部分第三方启动器：`[12:04:27] [main/INFO] (QuiltLoader) msg`
+ *    括号内是 logger，冒号可有可无。
+ * 3. 原版 / Fabric / Quilt 标准形式：`[12:04:27] [main/INFO]: msg`（无 logger）
+ * 4. 启动器剥离时间戳后的形式：`[main/INFO] [FML]: msg`，首段即 `线程/级别`。
+ *
+ * 注意顺序：3 段方括号的形式必须先于「线程/级别」形式匹配，否则 logger 会被当成消息的一部分。
+ */
 const FORGE_PREFIX = /^\[([^\]]*)\]\s*\[([^\]]*)\]\s*\[([^\]]*)\]:\s?(.*)$/
-const PAREN_PREFIX = /^\[([^\]]*)\]\s*\[([^\]]*)\]\s*\(([^)]*)\):\s?(.*)$/
+const PAREN_PREFIX = /^\[([^\]]*)\]\s*\[([^\]]*)\]\s*\(([^)]*)\):?\s?(.*)$/
+const BARE_THREAD_PREFIX = /^\[([^\]]*\/[A-Za-z]+)\]:?\s*(?:\[([^\]]*)\]:?\s*)?(.*)$/
 const GENERIC_PREFIX = /^(?:\[[^\]]*\]\s*)+/
 
 const LEVELS = new Set(['FATAL', 'ERROR', 'WARN', 'WARNING', 'INFO', 'DEBUG', 'TRACE'])
@@ -39,24 +52,42 @@ function normalizeLevel(value: string | undefined): string | null {
   return LEVELS.has(upper) ? upper : null
 }
 
+/** Forge 系日志的 logger 常带结尾斜杠（`ModSorter/`、`mixin/`），统一去掉便于比对 */
+function stripLoggerSuffix(value: string | undefined): string | undefined {
+  if (!value) return undefined
+  const trimmed = value.trim().replace(/\/+$/, '')
+  return trimmed || undefined
+}
+
 export function parseLine(raw: string): LineMeta {
   let time: string | undefined
   let threadRaw: string | undefined
   let logger: string | undefined
   let message = raw
 
-  let match = FORGE_PREFIX.exec(raw)
-  if (!match) match = PAREN_PREFIX.exec(raw)
+  const forge = FORGE_PREFIX.exec(raw)
+  const paren = forge ? null : PAREN_PREFIX.exec(raw)
+  const bare = forge || paren ? null : BARE_THREAD_PREFIX.exec(raw)
 
-  if (match) {
-    time = match[1]
-    threadRaw = match[2]
-    logger = match[3]
-    message = match[4]
+  if (forge) {
+    time = forge[1]
+    threadRaw = forge[2]
+    logger = stripLoggerSuffix(forge[3])
+    message = forge[4]
+  } else if (paren) {
+    time = paren[1]
+    threadRaw = paren[2]
+    logger = stripLoggerSuffix(paren[3])
+    message = paren[4]
+  } else if (bare) {
+    threadRaw = bare[1]
+    logger = stripLoggerSuffix(bare[2])
+    message = bare[3]
   } else {
     const generic = GENERIC_PREFIX.exec(raw)
     if (generic && generic[0].length < raw.length) {
-      message = raw.slice(generic[0].length)
+      // `[12:00:00] [main/INFO]: msg` 的前缀正则不含冒号，残留的 `: ` 要去掉
+      message = raw.slice(generic[0].length).replace(/^:\s?/, '')
       const groups = raw.slice(0, generic[0].length).match(/\[([^\]]*)\]/g) ?? []
       if (groups.length >= 2) threadRaw = groups[1].replace(/[[\]]/g, '')
     }

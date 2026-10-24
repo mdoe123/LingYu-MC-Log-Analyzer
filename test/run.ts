@@ -6,8 +6,12 @@ import { looksLikeGameDir } from '../src/main/analysis/scan'
 import { identifyJavaHome, normalizeJavaArch, parseJavaVersion } from '../src/main/java/identify'
 import { scanJavaRuntimes } from '../src/main/java/scan'
 import { buildEvidencePack } from '../src/main/analysis/ai'
+import { detectLoader } from '../src/main/analysis/loader'
+import { parseLine, parseLog } from '../src/main/analysis/parse'
+import { parseCrashReport } from '../src/main/analysis/crash'
+import { runRules, type LogSource } from '../src/main/analysis/rules'
 import { applyLauncherDefaults, resolveLauncherProfile } from '../src/main/launcher'
-import type { BaseAnalysis, Settings } from '../src/shared/types'
+import type { BaseAnalysis, LogFileKind, ScannedFile, Settings } from '../src/shared/types'
 
 const settings: Settings = {
   provider: 'deepseek',
@@ -81,6 +85,9 @@ async function main(): Promise<void> {
 
   console.log('\n=== 规则引擎开关 ===')
   await runRuleEngineChecks()
+
+  console.log('\n=== 加载器适配（Fabric / Quilt / Forge / NeoForge） ===')
+  await runLoaderChecks()
 
   console.log('\n=== 启动器配置联动 ===')
   await runLauncherChecks(base)
@@ -253,6 +260,291 @@ async function runDirectoryChecks(): Promise<void> {
 
   if (failures.length > 0) {
     throw new Error(`目录分析检查失败：${failures.join('；')}`)
+  }
+}
+
+const FABRIC_LOG = [
+  '[12:00:00] [main/INFO]: Loading Minecraft 1.20.1 with Fabric Loader 0.15.7',
+  '[12:00:01] [main/ERROR]: Incompatible mods found!',
+  "[12:00:01] [main/ERROR]: \t- Mod 'sodium' (sodium) 0.5.8 requires version 0.92.0 or later of fabric-api, which is missing!",
+  '[12:00:01] [main/ERROR]: A potential solution has been determined:',
+  '[12:00:01] [main/ERROR]:    - Install fabric-api, version 0.92.0 or later.'
+].join('\n')
+
+const QUILT_LOG = [
+  '[12:00:00] [main/INFO] (QuiltLoader) Loading Minecraft 1.19.4 with Quilt Loader 0.20.0',
+  '[12:00:01] [main/ERROR] (QuiltLoader) Incompatible mod set!',
+  "[12:00:01] [main/ERROR] (QuiltLoader) Dependency for mod 'sodium' on quilt_loader"
+].join('\n')
+
+const NEOFORGE_LOG = [
+  '[12:00:00] [modloading-worker-0/INFO] [ne.ne.fm.lo.ModLoader/]: Found arguments: --fml.mcVersion 1.21.1 --fml.neoForgeVersion 21.1.80',
+  '[12:00:01] [main/ERROR] [ne.ne.fm.lo.ModLoadingException/]: Mod loading failures have occurred',
+  '[12:00:01] [main/ERROR] [ne.ne.fm.lo.ModLoadingException/]: -- Mod loading issue for: examplemod --',
+  '[12:00:01] [main/ERROR] [ne.ne.fm.lo.ModLoadingException/]: oldmod.jar is not a valid mod file'
+].join('\n')
+
+const FORGE_LOG = [
+  '[12:04:26] [main/INFO] [minecraft/Main]: Launching target \'forgeclient\' with 47 mods',
+  '[12:04:27] [main/INFO] [net.minecraftforge.fml.loading.ModSorter/]: Found mod file embeddium-0.3.31.jar'
+].join('\n')
+
+const FORGE_CRASH = [
+  '---- Minecraft Crash Report ----',
+  '// Uh...',
+  'Time: 2026-10-20 12:04:31',
+  'Description: Mod loading error has occurred',
+  'java.lang.RuntimeException: Mod loading has failed',
+  'Caused by: java.lang.NoClassDefFoundError: com/example/Lib',
+  '-- System Details --',
+  'Details:',
+  '\tMinecraft Version: 1.20.1',
+  '\tJava Version: 17.0.8, Microsoft',
+  '\tFML: 47.3.0',
+  '\tSuspected Mods: ',
+  '\t\tExample Library (examplelib)',
+  ''
+].join('\n')
+
+const FABRIC_CRASH = [
+  '---- Minecraft Crash Report ----',
+  'Description: Initializing game',
+  "java.lang.RuntimeException: Could not execute entrypoint stage 'main' due to errors, provided by 'examplemod' at 'com.example.ExampleMod'!",
+  'at net.fabricmc.loader.impl.game.minecraft.Hooks.startClient(Hooks.java:52)',
+  '-- System Details --',
+  'Details:',
+  '\tMinecraft Version: 1.21.1',
+  '\tFabric Mods: ',
+  '\t\tfabric-api: Fabric API 0.92.0+1.21.1',
+  '\t\texamplemod: Example Mod 1.0.0',
+  '\tJava Version: 21.0.1, Microsoft'
+].join('\n')
+
+const NEOFORGE_CRASH = [
+  '---- Minecraft Crash Report ----',
+  'Description: Mod loading failures have occurred',
+  'net.neoforged.fml.ModLoadingException: Mod loading has failed',
+  '-- Mod loading issue for: examplemod --',
+  'Details:',
+  '-- System Details --',
+  'Details:',
+  '\tMinecraft Version: 1.21.1',
+  '\tNeoForge: 21.1.80'
+].join('\n')
+
+function makeSource(name: string, text: string, kind: LogFileKind = 'latest'): LogSource {
+  const log = parseLog(name, text, false)
+  const file: ScannedFile = {
+    id: name,
+    name,
+    path: name,
+    size: text.length,
+    bytesRead: text.length,
+    lines: log.lines.length,
+    kind,
+    encoding: 'utf-8',
+    included: true,
+    note: '',
+    truncated: false
+  }
+  return { file, log }
+}
+
+async function runLoaderChecks(): Promise<void> {
+  const failures: string[] = []
+  const check = (name: string, condition: boolean, detail?: string): void => {
+    if (condition) {
+      console.log(`  PASS ${name}`)
+      return
+    }
+    failures.push(name)
+    console.log(`  FAIL ${name}${detail ? ` — ${detail}` : ''}`)
+  }
+
+  // ---- 识别 ----
+  const fabric = detectLoader([FABRIC_LOG])
+  check('识别 Fabric', fabric.family === 'fabric', String(fabric.family))
+  check('读取 Fabric 版本', fabric.version === '0.15.7', String(fabric.version))
+
+  const quilt = detectLoader([QUILT_LOG])
+  check('识别 Quilt', quilt.family === 'quilt', String(quilt.family))
+  check('读取 Quilt 版本', quilt.version === '0.20.0', String(quilt.version))
+
+  const neo = detectLoader([NEOFORGE_LOG])
+  check('识别 NeoForge', neo.family === 'neoforge', String(neo.family))
+  check('读取 NeoForge 版本', neo.version === '21.1.80', String(neo.version))
+
+  const forge = detectLoader([FORGE_LOG, FORGE_CRASH])
+  check('识别 Forge', forge.family === 'forge', String(forge.family))
+  check('从 System Details 读取 Forge 版本', forge.version === '47.3.0', String(forge.version))
+
+  // NeoForge 1.20.1 由 Forge 分叉而来，包名仍是 net.minecraftforge.*；必须靠权重判定为 NeoForge
+  const ambiguous = detectLoader([
+    NEOFORGE_CRASH,
+    'at net.minecraftforge.fml.loading.FMLClientLaunchProvider.launch(FMLClientLaunchProvider.java:37)'
+  ])
+  check('NeoForge 优先于 Forge 的残留包名', ambiguous.family === 'neoforge', String(ambiguous.family))
+
+  // NeoForge 1.20.1 的坐标用冒号分隔（net.neoforged:forge:…），也要压过残留的 net.minecraftforge.*
+  const neoCoordinate = detectLoader([
+    '\tForge: net.neoforged:forge:47.1.106',
+    'at net.minecraftforge.fml.loading.FMLClientLaunchProvider.launch(FMLClientLaunchProvider.java:37)'
+  ])
+  check('NeoForge 冒号坐标可识别', neoCoordinate.family === 'neoforge', String(neoCoordinate.family))
+
+  // 只有 Forge 特征时不能被误判为 NeoForge
+  const forgeOnly = detectLoader([
+    '\tForge: net.minecraftforge:47.2.0',
+    'at net.minecraftforge.fml.loading.FMLClientLaunchProvider.launch(FMLClientLaunchProvider.java:37)'
+  ])
+  check('纯 Forge 特征不被误判为 NeoForge', forgeOnly.family === 'forge', String(forgeOnly.family))
+
+  // Quilt 兼容 Fabric 模组，日志里会同时出现 net.fabricmc.*
+  const quiltOverFabric = detectLoader([
+    QUILT_LOG,
+    'at net.fabricmc.loader.impl.launch.FabricLauncherBase.launch(FabricLauncherBase.java:70)'
+  ])
+  check('Quilt 优先于 Fabric 的兼容痕迹', quiltOverFabric.family === 'quilt', String(quiltOverFabric.family))
+
+  check('无特征时返回 unknown', detectLoader(['[12:00:00] [main/INFO]: Done']).family === 'unknown')
+
+  // ---- 行前缀 ----
+  const forgeLine = parseLine(
+    '[12:04:27] [main/INFO] [net.minecraftforge.fml.loading.ModSorter/]: Found mod file a.jar'
+  )
+  check('Forge 前缀：级别', forgeLine.level === 'INFO', forgeLine.level)
+  check(
+    'Forge 前缀：logger 去掉结尾斜杠',
+    forgeLine.logger === 'net.minecraftforge.fml.loading.ModSorter',
+    forgeLine.logger
+  )
+  check('Forge 前缀：消息', forgeLine.message === 'Found mod file a.jar', forgeLine.message)
+
+  const vanillaLine = parseLine('[12:00:00] [main/INFO]: Loading Minecraft 1.20.1 with Fabric Loader 0.15.7')
+  check('原版 / Fabric 前缀：级别', vanillaLine.level === 'INFO', vanillaLine.level)
+  check(
+    '原版 / Fabric 前缀：消息不带前缀',
+    vanillaLine.message.startsWith('Loading Minecraft'),
+    vanillaLine.message
+  )
+
+  const quiltLine = parseLine('[12:00:00] [main/INFO] (QuiltLoader) Loading Minecraft 1.19.4')
+  check('Quilt 括号前缀：logger', quiltLine.logger === 'QuiltLoader', quiltLine.logger)
+  check('Quilt 括号前缀：消息', quiltLine.message === 'Loading Minecraft 1.19.4', quiltLine.message)
+
+  const bareLine = parseLine('[main/INFO] [FML]: Done (1.2s)!')
+  check('无时间戳前缀：级别', bareLine.level === 'INFO', bareLine.level)
+  check('无时间戳前缀：logger', bareLine.logger === 'FML', bareLine.logger)
+  check('无时间戳前缀：消息', bareLine.message === 'Done (1.2s)!', bareLine.message)
+
+  const warnLine = parseLine('[12:00:00] [Render thread/WARN]: Missing sound')
+  check('WARNING 归一为 WARN', parseLine('[12:00:00] [main/WARNING]: x').level === 'WARN')
+  check('多级前缀不被误切', warnLine.level === 'WARN' && warnLine.thread === 'Render thread', warnLine.thread)
+
+  // ---- 规则（按加载器开关）----
+  const ruleOf = (text: string, family: 'fabric' | 'quilt' | 'forge' | 'neoforge' | 'unknown') =>
+    runRules({
+      sources: [makeSource('latest.log', text)],
+      crashReports: [],
+      hasHsErr: false,
+      modJars: [],
+      loader: { family }
+    })
+
+  check('Fabric 触发不兼容规则', ruleOf(FABRIC_LOG, 'fabric').findings.some((f) => f.id === 'fabric-quilt-incompatible'))
+  check(
+    'Fabric 同时触发缺前置规则',
+    ruleOf(FABRIC_LOG, 'fabric').findings.some((f) => f.id === 'missing-dep')
+  )
+  check(
+    'Quilt 触发不兼容规则',
+    ruleOf(QUILT_LOG, 'quilt').findings.some((f) => f.id === 'fabric-quilt-incompatible')
+  )
+  check(
+    '加载器为 Forge 时不套用 Fabric/Quilt 规则',
+    !ruleOf(FABRIC_LOG, 'forge').findings.some((f) => f.id === 'fabric-quilt-incompatible')
+  )
+  check(
+    '加载器未识别时不设门槛（规则仍生效）',
+    ruleOf(FABRIC_LOG, 'unknown').findings.some((f) => f.id === 'fabric-quilt-incompatible')
+  )
+  check(
+    'NeoForge 触发加载中止规则',
+    ruleOf(NEOFORGE_LOG, 'neoforge').findings.some((f) => f.id === 'forge-neoforge-mod-loading')
+  )
+  check(
+    'NeoForge 触发构建不匹配规则',
+    ruleOf(NEOFORGE_LOG, 'neoforge').findings.some((f) => f.id === 'loader-wrong-build')
+  )
+  check(
+    'NeoForge 规则不对 Fabric 生效',
+    !ruleOf(NEOFORGE_LOG, 'fabric').findings.some((f) => f.id === 'forge-neoforge-mod-loading')
+  )
+
+  // ---- 崩溃报告区块 ----
+  const forgeCrash = parseCrashReport('crash-forge.txt', FORGE_CRASH)
+  check(
+    'Forge：解析 Suspected Mods',
+    Boolean(forgeCrash.suspectedMods?.includes('examplelib')),
+    JSON.stringify(forgeCrash.suspectedMods)
+  )
+  check('Forge：读取 Mod 数量缺省时不臆造', forgeCrash.modCount === undefined, String(forgeCrash.modCount))
+
+  const fabricCrash = parseCrashReport('crash-fabric.txt', FABRIC_CRASH)
+  check(
+    'Fabric：解析 Fabric Mods 清单',
+    fabricCrash.loaderMods?.length === 2,
+    JSON.stringify(fabricCrash.loaderMods)
+  )
+  check('Fabric：modid 与名称、版本分离', fabricCrash.loaderMods?.[0]?.id === 'fabric-api')
+  check('Fabric：Mod 数量由清单推导', fabricCrash.modCount === 2, String(fabricCrash.modCount))
+  check(
+    'Fabric：解析 provided by 点名',
+    Boolean(fabricCrash.failedMods?.includes('examplemod')),
+    JSON.stringify(fabricCrash.failedMods)
+  )
+
+  const neoCrash = parseCrashReport('crash-neo.txt', NEOFORGE_CRASH)
+  check(
+    'NeoForge：解析 Mod loading issue 区块',
+    Boolean(neoCrash.suspectedMods?.includes('examplemod')),
+    JSON.stringify(neoCrash.suspectedMods)
+  )
+  check(
+    'NeoForge：不产生 Fabric Mods 清单',
+    neoCrash.loaderMods === undefined && neoCrash.modCount === undefined
+  )
+
+  // ---- 嫌疑评分：加载器点名优先于堆栈推断 ----
+  const suspectRules = runRules({
+    sources: [makeSource('latest.log', FABRIC_LOG)],
+    crashReports: [forgeCrash],
+    hasHsErr: false,
+    modJars: ['embeddium-0.3.31.jar'],
+    loader: { family: 'forge' }
+  })
+  check(
+    '加载器点名的模组排在首位',
+    suspectRules.suspects[0]?.name === 'examplelib',
+    JSON.stringify(suspectRules.suspects.slice(0, 2))
+  )
+  check('加载器点名分值 76', suspectRules.suspects[0]?.score === 76, String(suspectRules.suspects[0]?.score))
+
+  const quiltSuspects = runRules({
+    sources: [makeSource('latest.log', QUILT_LOG)],
+    crashReports: [],
+    hasHsErr: false,
+    modJars: [],
+    loader: { family: 'quilt' }
+  })
+  check(
+    'Quilt 依赖缺失项进入嫌疑表',
+    quiltSuspects.suspects.some((item) => item.name === 'quilt_loader'),
+    JSON.stringify(quiltSuspects.suspects.map((item) => item.name))
+  )
+
+  if (failures.length > 0) {
+    throw new Error(`加载器适配检查失败：${failures.join('；')}`)
   }
 }
 

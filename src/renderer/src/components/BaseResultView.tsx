@@ -126,6 +126,14 @@ export function BaseResultView({
                   </span>
                 </div>
               )}
+              {(crash.suspectedMods?.length ?? 0) + (crash.failedMods?.length ?? 0) > 0 && (
+                <div className="kv-row">
+                  <span className="kv-key">加载器点名</span>
+                  <span className="kv-val mono" style={{ fontSize: 11 }}>
+                    {[...(crash.suspectedMods ?? []), ...(crash.failedMods ?? [])].join('、')}
+                  </span>
+                </div>
+              )}
               <div className="kv-row">
                 <span className="kv-key">来源</span>
                 <span className="kv-val mono" style={{ fontSize: 11 }}>

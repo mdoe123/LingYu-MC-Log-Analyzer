@@ -14,6 +14,7 @@ import { listZip, readEntry } from './extract'
 import { listGameDir, readFileCapped } from './scan'
 import { parseLog, type ParsedLog } from './parse'
 import { parseCrashReport } from './crash'
+import { detectLoader, detectionSample, type LoaderProfile } from './loader'
 import { extractEnvironment, guessStage, runRules, type LogSource } from './rules'
 
 const MAX_FILE_BYTES = 48 * 1024 * 1024
@@ -117,14 +118,24 @@ function finalizeAnalysis(input: {
     .map((item) => parseCrashReport(item.file.path, item.text))
 
   const hasHsErr = loaded.some((item) => item.file.kind === 'hs_err')
-  const environment = extractEnvironment({ crashReports, sources })
+  const loader = detectLoader(
+    detectionSample(loaded.map((item) => ({ kind: item.file.kind, text: item.text })))
+  )
+  const environment = extractEnvironment({ crashReports, sources, loader })
 
   if (input.modJars.length > 0 && !environment.modCount) {
     environment.modCount = input.modJars.length
   }
 
   const stageGuess = guessStage({ sources, crashReports, hasHsErr, env: environment })
-  const rules = runRules({ sources, crashReports, hasHsErr, modJars: input.modJars, useRuleEngine })
+  const rules = runRules({
+    sources,
+    crashReports,
+    hasHsErr,
+    modJars: input.modJars,
+    useRuleEngine,
+    loader
+  })
 
   onProgress({
     stage: 'rules',
@@ -147,6 +158,11 @@ function finalizeAnalysis(input: {
   }
   if (!loaded.some((item) => item.file.kind === 'latest')) {
     notes.push('未找到 latest.log，可能是仅提供了启动器日志，或输入未包含游戏 logs 目录。')
+  }
+  if (loader.family === 'unknown') {
+    notes.push(
+      '未从输入中识别出模组加载器（Fabric / Quilt / Forge / NeoForge），加载器专属规则已全部放开匹配，可能出现跨加载器的误报。'
+    )
   }
   if (input.historyCandidates && !loaded.some((item) => item.file.kind === 'history')) {
     notes.push('存在历史日志，默认未参与分析；定位偶发崩溃时可手动选择包含历史日志的输入。')
@@ -212,14 +228,16 @@ export async function analyzeArchive(
     const sources: LogSource[] = [{ file: loaded.file, log: loaded.log }]
     const crashReports =
       loaded.file.kind === 'crash' ? [parseCrashReport(loaded.file.path, loaded.text)] : []
-    const env = extractEnvironment({ crashReports, sources })
+    const loader = detectLoader(detectionSample([{ kind: loaded.file.kind, text: loaded.text }]))
+    const env = extractEnvironment({ crashReports, sources, loader })
     const stageGuess = guessStage({ sources, crashReports, hasHsErr: loaded.file.kind === 'hs_err', env })
     const rules = runRules({
       sources,
       crashReports,
       hasHsErr: loaded.file.kind === 'hs_err',
       modJars: [],
-      useRuleEngine
+      useRuleEngine,
+      loader
     })
 
     onProgress({
